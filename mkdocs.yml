@@ -1,0 +1,70 @@
+site_name: CapsCode
+site_description: Run AI coding tools in Docker capsules with credential brokering and network containment.
+site_url: https://sayre4ux.github.io/capscode/
+repo_url: https://github.com/sayre4ux/capscode
+repo_name: sayre4ux/capscode
+edit_uri: edit/main/docs/
+copyright: Apache-2.0. CapsCode is not affiliated with Anthropic, OpenAI, or other providers.
+
+# Pages keep their .md-relative paths, so links and images work the same on GitHub and on the site.
+use_directory_urls: false
+
+exclude_docs: |
+  requirements.txt
+
+theme:
+  name: material
+  logo: assets/logo.png
+  favicon: assets/logo.png
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark theme
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light theme
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Install: install.md
+      - Authentication: authentication.md
+  - Using CapsCode:
+      - Boxes: boxes.md
+      - How your files are handled: files.md
+      - Networking: networking.md
+      - Tool versions and updates: toolchain.md
+  - Reference:
+      - CLI reference: cli.md
+      - Threat model: threat-model.md
+      - Release assets: release-assets.md
+      - Update channel format: channel-format.md
+  - Roadmap: roadmap.md

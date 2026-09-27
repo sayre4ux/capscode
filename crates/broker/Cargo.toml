@@ -1,0 +1,47 @@
+[package]
+name = "capscode-broker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+# The crate is both the broker library (used in-process by the CLI/tests) and the
+# `capscode-broker` binary that runs as PID 1 inside the gateway container.
+[lib]
+name = "capscode_broker"
+path = "src/lib.rs"
+
+[[bin]]
+name = "capscode-broker"
+path = "src/main.rs"
+
+[dependencies]
+capscode-core = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+tokio = { workspace = true, features = ["signal"] }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rcgen = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+secrecy = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+http-body-util = "0.1"
+bytes = "1"
+webpki-roots = "1"
+rustls-pemfile = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["time", "rt-multi-thread"] }
+tracing-subscriber = { workspace = true }

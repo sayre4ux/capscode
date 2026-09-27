@@ -1,0 +1,68 @@
+[package]
+name = "capscode"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[[bin]]
+name = "capscode"
+path = "src/main.rs"
+
+[dependencies]
+capscode-core = { workspace = true }
+capscode-runtime = { workspace = true }
+capscode-git = { workspace = true }
+capscode-broker = { workspace = true }
+capscode-net = { workspace = true }
+anyhow = { workspace = true }
+base64 = "0.22"
+clap = { workspace = true }
+clap_complete = { workspace = true }
+console = "0.16.4"
+dialoguer = { workspace = true }
+figment = { workspace = true }
+git2 = { workspace = true }
+indicatif = { workspace = true }
+keyring = { version = "=3.6.3", default-features = false, features = ["apple-native", "sync-secret-service", "crypto-rust", "vendored"] }
+secrecy = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+# Already in the dependency graph (rustls/rcgen pull it in); declared directly
+# so the composite capsule tag can be computed identically here and in
+# scripts/build-images.sh.
+sha2 = "0.10"
+tokio = { workspace = true, features = ["io-std", "signal", "sync", "time"] }
+# Blocking HTTPS client for the update channel only (channel.json and the toolchain
+# lock, both small). Features:
+# - default features off: no gzip decoder parsing untrusted bytes (the bodies are
+#   tiny) and no bundled `ring` provider;
+# - rustls-no-provider: rustls TLS; the CLI passes rustls's aws-lc-rs provider, which
+#   the broker already compiles, so no second crypto backend is added;
+# - rustls-webpki-roots: Mozilla's root store (webpki-roots), already in the graph.
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots"] }
+# Declared directly only to hand ureq the aws-lc-rs crypto provider (see above).
+rustls = { workspace = true }
+# DECISION: flate2 and tar (plus miniz_oxide, adler2, simd-adler32, crc32fast, and
+# filetime) read the release build-context tarball in `capscode update --cli`. Nothing in
+# the graph decodes gzip, so flate2 uses its pure-Rust backend (miniz_oxide) rather
+# than linking a second zlib. tar only parses headers here: the CLI writes every
+# file itself after validating the entry, and never calls tar's own unpack.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4", default-features = false }
+toml = { workspace = true }
+tracing = { workspace = true }
+whoami = "1"
+tracing-subscriber = { workspace = true }
+zeroize = { workspace = true }
+tempfile = "3"
+libc = "0.2"
+
+[dev-dependencies]
+async-trait = { workspace = true }

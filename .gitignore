@@ -1,0 +1,15 @@
+target/
+._*
+
+# macOS Finder metadata
+.DS_Store
+
+# WireGuard / VPN configs — contain private keys, never commit
+*.conf
+# ...but the capsule's tmux config is shipped IN the image and holds no secrets.
+# Without this exception the build breaks on a fresh clone (COPY tmux.conf).
+!images/tmux.conf
+
+# Local documentation preview
+.venv-docs/
+site/

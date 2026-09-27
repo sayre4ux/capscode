@@ -1,0 +1,130 @@
+name: Release CapsCode CLI
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publish-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  # Passed to scripts through the environment, never spliced into a shell line.
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  test:
+    name: Release tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          toolchain: "1.98"
+          components: rustfmt, clippy
+          rustflags: ""
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  build-binaries:
+    name: Build the ${{ matrix.platform }} binary
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: macos-universal
+            os: macos-latest
+            targets: aarch64-apple-darwin, x86_64-apple-darwin
+          # DECISION: Ubuntu 22.04 runners (glibc 2.35) instead of ubuntu-latest, so the
+          # glibc binaries run on Ubuntu 22.04+ and Debian 12+; build-binary.sh refuses
+          # a binary that needs a newer glibc.
+          - platform: linux-x86_64
+            os: ubuntu-22.04
+            targets: x86_64-unknown-linux-gnu
+          - platform: linux-aarch64
+            os: ubuntu-22.04-arm
+            targets: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          toolchain: "1.98"
+          target: ${{ matrix.targets }}
+          rustflags: ""
+      - name: Build, check, and sign the binary
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: scripts/release/build-binary.sh --platform "$PLATFORM" --version "${TAG#v}" --out-dir "$RUNNER_TEMP/capscode-binaries" --target-dir "$RUNNER_TEMP/target"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: capscode-${{ matrix.platform }}
+          path: ${{ runner.temp }}/capscode-binaries/
+          if-no-files-found: error
+          # Only the release job below reads these; the release keeps the copies.
+          retention-days: 1
+
+  release:
+    name: Assemble, attest, and publish the release
+    needs:
+      - test
+      - build-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: capscode-*
+          path: ${{ runner.temp }}/capscode-binaries
+          merge-multiple: true
+      - name: Changelog gate, source and build-context tarballs, SHA256SUMS
+        run: scripts/release/cli-release.sh prepare --tag "$TAG" --binaries-dir "$RUNNER_TEMP/capscode-binaries" --out-dir "$RUNNER_TEMP/capscode-cli-release"
+      # DECISION: one attestation covers every asset users download, including SHA256SUMS;
+      # its bundle (bundle-path) is attached to the release.
+      - id: attest
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            ${{ runner.temp }}/capscode-cli-release/capscode-*-src.tar.gz
+            ${{ runner.temp }}/capscode-cli-release/capscode-*-build-context.tar.gz
+            ${{ runner.temp }}/capscode-cli-release/capscode-*-release-notes.md
+            ${{ runner.temp }}/capscode-cli-release/capscode-*-macos-universal
+            ${{ runner.temp }}/capscode-cli-release/capscode-*-linux-x86_64
+            ${{ runner.temp }}/capscode-cli-release/capscode-*-linux-aarch64
+            ${{ runner.temp }}/capscode-cli-release/SHA256SUMS
+      - name: Publish the release and the channel branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: scripts/release/cli-release.sh publish --tag "$TAG" --bundle "$BUNDLE" --out-dir "$RUNNER_TEMP/capscode-cli-release"

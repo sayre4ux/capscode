@@ -1,0 +1,21 @@
+[package]
+name = "capscode-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+async-trait = { workspace = true }
+bollard = { workspace = true }
+capscode-core = { workspace = true }
+futures-util = "0.3"
+libc = "0.2"
+tokio = { workspace = true, features = ["signal", "time"] }
+zeroize = { workspace = true }

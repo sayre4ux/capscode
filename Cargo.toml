@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/runtime",
+    "crates/git",
+    "crates/broker",
+    "crates/net",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98"
+license = "Apache-2.0"
+repository = "https://github.com/sayre4ux/capscode"
+description = "Run AI coding tools in Docker capsules with credential brokering and network containment."
+readme = "README.md"
+keywords = ["ai", "sandbox", "container", "security", "coding-agent"]
+categories = ["command-line-utilities", "development-tools"]
+
+[workspace.dependencies]
+capscode-core = { path = "crates/core" }
+capscode-runtime = { path = "crates/runtime" }
+capscode-git = { path = "crates/git" }
+capscode-broker = { path = "crates/broker" }
+capscode-net = { path = "crates/net" }
+
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "process"] }
+bollard = "0.21"
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+rustls = "0.23"
+tokio-rustls = "0.26"
+rcgen = "0.14"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+figment = { version = "0.10", features = ["toml", "env"] }
+secrecy = "0.10"
+zeroize = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+directories = "6"
+indicatif = "0.18"
+dialoguer = "0.12"
+uuid = { version = "1", features = ["v4"] }
+async-trait = "0.1"

@@ -1,0 +1,27 @@
+[package]
+name = "capscode-git"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+async-trait = { workspace = true }
+capscode-core = { workspace = true }
+git2 = { workspace = true }
+libc = "0.2"
+serde_json = "1"
+tempfile = "3"
+tokio = { workspace = true, features = ["process", "rt"] }
+
+[dev-dependencies]
+bollard = { workspace = true }
+futures-util = "0.3"
+tokio = { workspace = true, features = ["full"] }
+uuid = { workspace = true }

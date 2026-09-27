@@ -1,0 +1,24 @@
+[package]
+name = "capscode-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+capscode-core = { workspace = true }
+async-trait = { workspace = true }
+base64 = "0.22"
+ipnet = "2"
+secrecy = { workspace = true }
+tracing = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

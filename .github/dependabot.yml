@@ -1,0 +1,23 @@
+# Opens pull requests when a pinned dependency has a newer release. Workflow actions stay
+# pinned to full commit SHAs; Dependabot updates the SHA and its version comment together.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /docs
+    schedule:
+      interval: monthly
+    groups:
+      docs:
+        patterns: ["*"]
+    ignore:
+      # MkDocs 2.0 drops the plugin and theme system the site is built on.
+      - dependency-name: mkdocs
+        versions: [">=2"]

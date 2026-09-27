@@ -1,0 +1,185 @@
+anthropic:
+  api_style: anthropic
+  base_url: https://api.anthropic.com
+  auth: x-api-key
+  key_env: ANTHROPIC_API_KEY
+  default_model: claude-opus-4-8
+
+openai:
+  api_style: openai
+  base_url: https://api.openai.com/v1
+  auth: bearer
+  key_env: OPENAI_API_KEY
+  default_model: gpt-5.5
+
+kimi:
+  api_style: anthropic
+  base_url: https://api.moonshot.ai/anthropic
+  auth: bearer
+  key_env: MOONSHOT_API_KEY
+  default_model: kimi-k2.6
+  experimental: true
+
+# Moonshot's OpenAI-compatible endpoint. Shown as "kimi" (its `id` stays
+# kimi-openai so existing configs keep resolving).
+kimi-openai:
+  label: kimi
+  api_style: openai
+  base_url: https://api.moonshot.ai/v1
+  auth: bearer
+  key_env: MOONSHOT_API_KEY
+  default_model: kimi-k2.6
+
+# Kimi "coding plan" subscription (api.kimi.com/coding) — a distinct product and
+# key from the Moonshot platform API above. It uses the id `kimi-coding`,
+# environment variable `KIMI_API_KEY`, and model `kimi-for-coding`. Anthropic-compatible
+# endpoint (the Claude Code path).
+kimi-coding:
+  api_style: anthropic
+  base_url: https://api.kimi.com/coding
+  auth: bearer
+  key_env: KIMI_API_KEY
+  default_model: kimi-for-coding
+  models: kimi-for-coding, kimi-for-coding-highspeed, k3
+
+# Same coding plan over the OpenAI-compatible endpoint (codex/opencode). Hermes
+# has no wire-style variants; CapsCode needs one because it gates providers by
+# wire format, so this keeps the registry's own `-openai` suffix and shares the
+# key. Shown as "kimi-coding".
+kimi-coding-openai:
+  label: kimi-coding
+  api_style: openai
+  base_url: https://api.kimi.com/coding/v1
+  auth: bearer
+  key_env: KIMI_API_KEY
+  default_model: kimi-for-coding
+  models: kimi-for-coding, kimi-for-coding-highspeed, k3
+
+kimi-cn:
+  api_style: anthropic
+  base_url: https://api.moonshot.cn/anthropic
+  auth: bearer
+  key_env: MOONSHOT_API_KEY
+  default_model: kimi-k2.6
+  experimental: true
+
+# Moonshot China's OpenAI-compatible endpoint (shown as "kimi-cn" in the OpenAI
+# group). China-region account required; unverified from abroad.
+kimi-cn-openai:
+  label: kimi-cn
+  api_style: openai
+  base_url: https://api.moonshot.cn/v1
+  auth: bearer
+  key_env: MOONSHOT_API_KEY
+  default_model: kimi-k2.6
+  experimental: true
+
+deepseek:
+  api_style: anthropic
+  base_url: https://api.deepseek.com/anthropic
+  auth: x-api-key
+  key_env: DEEPSEEK_API_KEY
+  default_model: deepseek-v4-pro
+
+# Z.AI international standard API (OpenAI Chat Completions).
+zai-api:
+  api_style: openai
+  base_url: https://api.z.ai/api/paas/v4
+  auth: bearer
+  key_env: GLM_API_KEY
+  default_model: glm-5.2
+  models: glm-5.2, glm-5-turbo, glm-4.7
+
+# Same standard API key over the Anthropic-compatible endpoint, which Z.AI's own
+# console documents for Claude Code (ANTHROPIC_BASE_URL). Shares the endpoint
+# with `zai-coding`: the plan attached to the key decides billing, not the URL.
+zai-api-anthropic:
+  label: zai-api
+  api_style: anthropic
+  base_url: https://api.z.ai/api/anthropic
+  auth: bearer
+  key_env: GLM_API_KEY
+  default_model: glm-5.2
+  models: glm-5.2, glm-5-turbo, glm-4.7
+
+# Zhipu AI China standard API (OpenAI Chat Completions).
+zai-api-cn:
+  api_style: openai
+  base_url: https://open.bigmodel.cn/api/paas/v4
+  auth: bearer
+  key_env: GLM_CN_API_KEY
+  default_model: glm-5.2
+  models: glm-5.2, glm-5-turbo, glm-4.7
+
+zai-api-cn-anthropic:
+  label: zai-api-cn
+  api_style: anthropic
+  base_url: https://open.bigmodel.cn/api/anthropic
+  auth: bearer
+  key_env: GLM_CN_API_KEY
+  default_model: glm-5.2
+  models: glm-5.2, glm-5-turbo, glm-4.7
+
+# Z.AI international Coding Plan. The subscription exposes both wire protocols.
+zai-coding:
+  api_style: anthropic
+  base_url: https://api.z.ai/api/anthropic
+  auth: bearer
+  key_env: GLM_API_KEY
+  default_model: glm-5.2
+  models: glm-5.2, glm-5-turbo, glm-4.7
+
+zai-coding-openai:
+  label: zai-coding
+  api_style: openai
+  base_url: https://api.z.ai/api/coding/paas/v4
+  auth: bearer
+  key_env: GLM_API_KEY
+  default_model: glm-5.2
+  models: glm-5.2, glm-5-turbo, glm-4.7
+
+# Zhipu AI China Coding Plan. The subscription exposes both wire protocols.
+zai-coding-cn:
+  api_style: anthropic
+  base_url: https://open.bigmodel.cn/api/anthropic
+  auth: bearer
+  key_env: GLM_CN_API_KEY
+  default_model: glm-5.2
+  models: glm-5.2, glm-5-turbo, glm-4.7
+
+zai-coding-cn-openai:
+  label: zai-coding-cn
+  api_style: openai
+  base_url: https://open.bigmodel.cn/api/coding/paas/v4
+  auth: bearer
+  key_env: GLM_CN_API_KEY
+  default_model: glm-5.2
+  models: glm-5.2, glm-5-turbo, glm-4.7
+
+grok:
+  api_style: openai
+  base_url: https://api.x.ai/v1
+  auth: bearer
+  key_env: XAI_API_KEY
+  default_model: grok-4.5
+
+openrouter:
+  api_style: openai
+  base_url: https://openrouter.ai/api/v1
+  auth: bearer
+  key_env: OPENROUTER_API_KEY
+  default_model: moonshotai/kimi-k2.6
+
+qwen:
+  api_style: openai
+  base_url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+  auth: bearer
+  key_env: DASHSCOPE_API_KEY
+  default_model: qwen3-coder-plus
+
+minimax:
+  api_style: anthropic
+  base_url: https://api.minimax.io/anthropic
+  auth: x-api-key
+  key_env: MINIMAX_API_KEY
+  default_model: MiniMax-M2.7

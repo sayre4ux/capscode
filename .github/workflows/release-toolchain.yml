@@ -1,0 +1,49 @@
+name: Release toolchain lock
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - images/toolchain.lock.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publish-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, attest, and publish the tested toolchain
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Build and smoke, then assemble release assets
+        run: scripts/release/toolchain-release.sh prepare --out-dir "$RUNNER_TEMP/capscode-toolchain-release"
+      - id: attest-lock
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: ${{ runner.temp }}/capscode-toolchain-release/toolchain.lock.toml
+      # DECISION: use the attest step's bundle-path output instead of downloading the
+      # bundle from the API. The manifest records the bundle's SHA-256, so it is written only now.
+      - name: Write channel.json with the lock attestation hash
+        env:
+          LOCK_BUNDLE: ${{ steps.attest-lock.outputs.bundle-path }}
+        run: scripts/release/toolchain-release.sh channel --bundle "$LOCK_BUNDLE" --out-dir "$RUNNER_TEMP/capscode-toolchain-release"
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: ${{ runner.temp }}/capscode-toolchain-release/channel.json
+      - name: Publish release and workflow-only channel branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release/toolchain-release.sh publish --out-dir "$RUNNER_TEMP/capscode-toolchain-release"

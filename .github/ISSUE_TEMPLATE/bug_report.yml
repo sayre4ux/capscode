@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in CapsCode does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste API keys, tokens, WireGuard configs, or private code. CapsCode output never
+        prints key values, but check what you paste. For a security issue, use private
+        vulnerability reporting instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. cd ~/some/project
+        2. capscode create demo
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: CapsCode version
+      description: Output of `capscode --version`.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform and runtime
+      placeholder: macOS 26 (Apple silicon) with OrbStack 2.1
+    validations:
+      required: true
+  - type: dropdown
+    id: tool
+    attributes:
+      label: Tool involved
+      multiple: true
+      options: [claude, codex, opencode, pi, omp, none or not sure]
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `capscode doctor --quick`
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output
+      description: Rerun with `-v` (for example `capscode -v codex`) and paste the relevant part.
+      render: text

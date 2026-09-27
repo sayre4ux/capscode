@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          # DECISION: pinned so a new stable lint cannot fail -D warnings on an unchanged tree. Bump together
+          # with rust-version in Cargo.toml.
+          toolchain: "1.98"
+          components: rustfmt, clippy
+          rustflags: ""
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - if: matrix.os == 'macos-latest'
+        run: /bin/bash scripts/ci/shell-tests.sh
+      # The installer's binary path against a local mirror, with the real CLI as the
+      # "release binary" (on macOS this also exercises the code-signature check).
+      - run: cargo build --locked -p capscode && bash scripts/test-install.sh --binary target/debug/capscode
+
+  toolchain-smoke:
+    name: Build and smoke toolchain images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: scripts/build-images.sh --no-smoke
+      - run: scripts/smoke-tui.sh all
+
+  shell:
+    name: Shell checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: shellcheck -x scripts/ci/*.sh scripts/release/*.sh scripts/lib/*.sh scripts/install.sh scripts/test-install.sh scripts/build-images.sh scripts/bump-tool.sh scripts/smoke-tui.sh scripts/test-*.sh images/*.sh
+      - run: for script in scripts/ci/*.sh scripts/release/*.sh scripts/lib/*.sh scripts/install.sh scripts/test-install.sh scripts/build-images.sh scripts/bump-tool.sh scripts/smoke-tui.sh scripts/test-*.sh images/*.sh; do bash -n "$script"; done
+      - run: scripts/ci/shell-tests.sh
+      - run: for platform in macos-universal linux-x86_64 linux-aarch64; do scripts/release/build-binary.sh --platform "$platform" --out-dir "$RUNNER_TEMP/bin" --dry-run; done
+      # Without a cargo build here, the test serves a small stand-in for the binary.
+      - run: bash scripts/test-install.sh
+
+  gateway-image:
+    name: Build gateway image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - run: docker buildx build --file images/gateway.Dockerfile --tag capscode/gateway:ci --load .

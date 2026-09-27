@@ -1,0 +1,55 @@
+name: Daily toolchain bump
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      tool:
+        description: Tool to resolve, or all tools
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - claude
+          - codex
+          - opencode
+          - pi
+          - omp
+          - playwright_core
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchain-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Resolve, smoke, and update the toolchain PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          # BOT_TOKEN must be a PAT or GitHub App token for PR workflows to run.
+          token: ${{ secrets.BOT_TOKEN || github.token }}
+      - name: Resolve candidates, build, smoke, and update the one PR
+        env:
+          GH_TOKEN: ${{ secrets.BOT_TOKEN || github.token }}
+          CAPSCODE_BOT_TRIGGER_TOKEN: ${{ secrets.BOT_TOKEN != '' }}
+          TOOL_INPUT: ${{ inputs.tool || 'all' }}
+        run: |
+          set +e
+          scripts/ci/bot-bump.sh --tool "$TOOL_INPUT"
+          status=$?
+          if [ "$status" -eq 10 ]; then
+            exit 0
+          fi
+          exit "$status"

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/sayre4ux/capscode/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue for an unpatched vulnerability.
+  - name: Documentation
+    url: https://sayre4ux.github.io/capscode/
+    about: Install, usage, and the threat model.

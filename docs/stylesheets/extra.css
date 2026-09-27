@@ -1,0 +1,37 @@
+/* CapsCode brand colors: teal to violet accent, neutral greys elsewhere. */
+:root,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #0f766e;
+  --md-primary-fg-color--light: #14b8a6;
+  --md-primary-fg-color--dark: #115e59;
+  --md-accent-fg-color: #6d5bd0;
+  --md-typeset-a-color: #0f766e;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #0b0e14;
+  --md-primary-fg-color--light: #1a1f2b;
+  --md-primary-fg-color--dark: #07090d;
+  --md-accent-fg-color: #8b7cff;
+  --md-typeset-a-color: #2ee6c5;
+  --md-default-bg-color: #0d1117;
+}
+
+.md-header,
+.md-tabs {
+  background: linear-gradient(90deg, var(--md-primary-fg-color), var(--md-primary-fg-color--dark));
+}
+
+[data-md-color-scheme="slate"] .md-header {
+  border-bottom: 1px solid rgba(46, 230, 197, 0.25);
+}
+
+/* Keep the home page title for screen readers and search; the wordmark shows the name. */
+.md-typeset h1.cc-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
