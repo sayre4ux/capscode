@@ -13,6 +13,8 @@ mkdir -p "$TEMP/bin" "$TEMP/transcripts"
 # container, and records its argv for the command-shape assertions.
 cat >"$TEMP/bin/docker" <<'FAKE'
 #!/usr/bin/env bash
+# Volume create/rm for the smoke workspace succeed silently; only `docker run` is recorded.
+[[ "${1:-}" == volume ]] && exit 0
 printf '%s\n' "$@" >"$SMOKE_ARGV_FILE"
 cat "$SMOKE_FIXTURE"
 FAKE
@@ -68,6 +70,9 @@ grep -Fq 'PASS codex' "$TEMP/out"; pass
 
 inner=$(tail -n 3 "$TEMP/argv" | head -n 1)
 [[ "$inner" == *'timeout --foreground '* ]] || { echo 'the tool must stay in the pty foreground process group' >&2; exit 1; }
+pass
+grep -Eq '^type=volume,source=capscode-smoke-workspace-[0-9]+-codex,target=/workspace$' "$TEMP/argv" || {
+  echo 'the smoke workspace must be a Docker volume, not a host directory the capsule chowns' >&2; exit 1; }
 pass
 [[ "$inner" == *'/tmp/capscode-smoke.typescript >/dev/null &'* ]] || { echo "script's stdout copy must not reach the marker lines" >&2; exit 1; }
 pass

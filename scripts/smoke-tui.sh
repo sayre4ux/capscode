@@ -4,12 +4,14 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 LOCK=${CAPSCODE_TOOLCHAIN_LOCK:-$ROOT/images/toolchain.lock.toml}
 source "$ROOT/scripts/lib/toolchain-lock.sh"
-scratch_dirs=()
+# The workspace is a Docker volume, as in a real capsule. The entrypoint hands /workspace to
+# the agent user, so a host directory would end up owned by another uid and could not be removed.
+smoke_volumes=()
 cleanup() {
-  local scratch
-  for scratch in "${scratch_dirs[@]:-}"; do
-    # An `[[ ]] && rm` as the trap's last command would turn an empty list into exit status 1.
-    if [[ -n "$scratch" ]]; then rm -rf -- "$scratch"; fi
+  local volume
+  for volume in "${smoke_volumes[@]:-}"; do
+    # An `[[ ]] && docker` as the trap's last command would turn an empty list into exit status 1.
+    if [[ -n "$volume" ]]; then docker volume rm -f "$volume" >/dev/null 2>&1 || true; fi
   done
 }
 trap cleanup EXIT
@@ -89,7 +91,7 @@ lock_value_for() {
       rest = substr(line, RSTART + RLENGTH)
       sub(/^[[:space:]]*/, "", rest)
       if (substr(rest, 1, 1) == "\"") {
-        if (match(rest, /^\"[^\"]*\"/)) print substr(rest, 2, RLENGTH - 2)
+        if (match(rest, /^"[^"]*"/)) print substr(rest, 2, RLENGTH - 2)
         return
       }
       if (substr(rest, 1, 1) != "[") return
@@ -171,7 +173,7 @@ smoke_catalog() {
 }
 
 run_tool() {
-  local tool=$1 image=$2 scratch=$3
+  local tool=$1 image=$2 workspace_volume=$3
   local tmp_options=$SMOKE_TMP_OPTIONS
   if ((negative_control)); then
     tmp_options=rw,noexec,nosuid,nodev
@@ -198,7 +200,7 @@ run_tool() {
     --tmpfs "$SMOKE_TMP_TARGET:$tmp_options,size=${SMOKE_TMP_SIZE_MIB}m"
     --tmpfs "$SMOKE_HOME_TARGET:$SMOKE_HOME_OPTIONS,size=${SMOKE_HOME_SIZE_MIB}m"
     --tmpfs "$SMOKE_SHM_TARGET:$SMOKE_SHM_OPTIONS,size=${SMOKE_SHM_SIZE_MIB}m"
-    --mount "type=bind,source=$scratch,target=$SMOKE_WORKSPACE_TARGET"
+    --mount "type=volume,source=$workspace_volume,target=$SMOKE_WORKSPACE_TARGET"
     -e TZ=UTC -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8 -e HISTFILE=/dev/null
     -e CAPSCODE_CA_CERT_PEM= -e CAPSCODE_WORKSPACE_MODE=copy
     -e CAPSCODE_TOOL_ENV_KEYS="$tool_env_keys"
@@ -306,12 +308,13 @@ for tool in "${tools[@]}"; do
     continue
   fi
   image=${image_override:-capscode/capsule-$tool:$version}
-  scratch=$(mktemp -d "${TMPDIR:-/tmp}/capscode-smoke-workspace.XXXXXX")
-  scratch_dirs+=("$scratch")
-  if ! run_tool "$tool" "$image" "$scratch"; then
+  workspace_volume="capscode-smoke-workspace-$$-$tool"
+  docker volume create "$workspace_volume" >/dev/null
+  smoke_volumes+=("$workspace_volume")
+  if ! run_tool "$tool" "$image" "$workspace_volume"; then
     failures=$((failures + 1))
   fi
-  rm -rf "$scratch"
+  docker volume rm -f "$workspace_volume" >/dev/null 2>&1 || true
 done
 
 ((failures == 0))
