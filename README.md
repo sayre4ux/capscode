@@ -11,7 +11,7 @@
   <a href="#use-it">Use it</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#limitations">Limitations</a> ·
-  <a href="docs/roadmap.md">Roadmap</a> ·
+  <a href="#roadmap">Roadmap</a> ·
   <a href="SECURITY.md">Security</a>
 </p>
 
@@ -122,6 +122,21 @@ The same pages are published at <https://sayre4ux.github.io/capscode/>.
 The capsule shares only the gateway's *network* namespace, not its process or filesystem
 namespace, so a compromised capsule can reach the broker but cannot read the key it holds. A box
 runs the same gateway and capsule pair, with a `tmux` shell that survives detaching.
+
+## Roadmap
+
+Next up: wider platform testing, a fix for sync conflicts in long-lived boxes, editor access to a
+box over SSH, and later a desktop and web interface. The [roadmap](docs/roadmap.md) also lists
+what is deliberately not planned.
+
+<p align="center">
+  <a href="docs/roadmap.md">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/roadmap-dark.jpg">
+      <img src="docs/assets/roadmap-light.jpg" alt="CapsCode roadmap after v0.1.0: Now, Next, Later, and Not planned" width="840">
+    </picture>
+  </a>
+</p>
 
 ## Limitations
 
