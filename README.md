@@ -100,18 +100,14 @@ The same pages are published at <https://sayre4ux.github.io/capscode/>.
 
 ## Architecture
 
-```
-HOST (capscode)         GATEWAY container            CAPSULE container
-──────────────────      ─────────────────────────    ─────────────────────────
-reads your credential   holds the real key           runs the AI tool as `agent`
-  (env/keychain/login) ► (tmpfs, never in env) ──►     (read-only rootfs, no caps)
-generates session CA    WireGuard + nftables          shares ONLY the gateway's
-git clone → volume      kill switch + mode-specific DNS network namespace
-                        broker :127.0.0.1:8443  ◄──── tool → broker → inject key → provider
-on Git sync: save branch (containment: public egress;
-  → capscode/<id>        tunnel: wg0 only)
-teardown: destroy all
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.png">
+    <img src="docs/assets/architecture-light.png" alt="CapsCode architecture: the CLI reads keys from the OS keychain and pipes them into the gateway container; the capsule container runs the AI tools, shares the gateway's network namespace, and reaches providers only through the broker" width="900">
+  </picture>
+</p>
+
+[Open the interactive diagram](https://sayre4ux.github.io/capscode/architecture.html): each box links to the code behind it.
 
 The capsule shares only the gateway's *network* namespace, not its process or filesystem
 namespace, so a compromised capsule can reach the broker but cannot read the key it holds. A box

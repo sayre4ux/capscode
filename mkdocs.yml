@@ -64,6 +64,7 @@ nav:
       - Tool versions and updates: toolchain.md
   - Reference:
       - CLI reference: cli.md
+      - Architecture diagram: architecture.html
       - Threat model: threat-model.md
       - Release assets: release-assets.md
       - Update channel format: channel-format.md
