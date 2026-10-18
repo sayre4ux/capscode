@@ -26,7 +26,7 @@ log() { echo "capscode-keeper: $*" >&2; }
 # Every descendant of $1, deepest first, read straight from /proc so no procps
 # dependency is added to the image. Depth is bounded: a tool that spawns a deep
 # tree still terminates because each level is visited once.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 descendants_of() {
     _parent=$1
     _found=""
@@ -62,7 +62,7 @@ descendants_of() {
     echo "$_found"
 }
 
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 shutdown() {
     # A second stop signal during cleanup should not interrupt a clean shutdown.
     trap '' TERM INT

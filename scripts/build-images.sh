@@ -143,4 +143,5 @@ chmod 600 "$SNAPSHOT_TMP"
 mv -f "$SNAPSHOT_TMP" "$SNAPSHOT_DIR/$ALL_TAG.lock.toml"
 
 echo "==> done. Images:"
-docker images | grep -E 'capscode/(gateway|capsule)' | grep -E ":$VERSION|:dev|:$(lock_ver claude)"
+# The listing is informational; an empty match must not fail a successful build.
+docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '^capscode/(gateway|capsule)' | grep -E ":$VERSION|:dev|:$(lock_ver claude)" || true

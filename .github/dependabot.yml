@@ -9,6 +9,10 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+    ignore:
+      # Major versions can change inputs or artifact formats; move to them deliberately.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: pip
     directory: /docs

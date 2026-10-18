@@ -9,8 +9,8 @@ toolchain_lock_value() {
       expression = field "[[:space:]]*=[[:space:]]*\"[^\"]*\""
       if (!match(line, expression)) return
       result = substr(line, RSTART, RLENGTH)
-      sub(/^[^=]*=[[:space:]]*\"/, "", result)
-      sub(/\"$/, "", result)
+      sub(/^[^=]*=[[:space:]]*"/, "", result)
+      sub(/"$/, "", result)
       print result
     }
     /^\[tools\]$/ { section = "tools"; next }
@@ -31,7 +31,7 @@ toolchain_lock_top_value() {
   local lock=$1 field=$2
   awk -v field="$field" '
     /^\[/ { exit }
-    $1 == field && $2 == "=" { sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[\"[:space:]]/, ""); print; exit }
+    $1 == field && $2 == "=" { sub(/^[^=]*=[[:space:]]*/, ""); gsub(/["[:space:]]/, ""); print; exit }
   ' "$lock"
 }
 
@@ -60,8 +60,8 @@ toolchain_lock_records() {
       expression = key "[[:space:]]*=[[:space:]]*\"[^\"]*\""
       if (!match(line, expression)) return ""
       result = substr(line, RSTART, RLENGTH)
-      sub(/^[^=]*=[[:space:]]*\"/, "", result)
-      sub(/\"$/, "", result)
+      sub(/^[^=]*=[[:space:]]*"/, "", result)
+      sub(/"$/, "", result)
       return result
     }
     function emit_tool(name, line, field, value) {

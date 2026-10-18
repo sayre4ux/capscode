@@ -5,6 +5,16 @@
   </picture>
 </h1>
 
+<p align="center">
+  <a href="https://sayre4ux.github.io/capscode/"><b>Documentation</b></a> ·
+  <a href="#install">Install</a> ·
+  <a href="#use-it">Use it</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#limitations">Limitations</a> ·
+  <a href="docs/roadmap.md">Roadmap</a> ·
+  <a href="SECURITY.md">Security</a>
+</p>
+
 **Isolated Docker capsules for AI coding tools.** Run `claude`, `codex`, `opencode`, `pi`, or
 `omp` in a container with a private copy of your project, credentials held outside the
 container, and network containment. You decide what comes back to your host.

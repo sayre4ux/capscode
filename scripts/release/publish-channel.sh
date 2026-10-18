@@ -50,7 +50,7 @@ fi
 
 temp_parent=$(mktemp -d "${TMPDIR:-/tmp}/capscode-channel-worktree.XXXXXX")
 temp_worktree="$temp_parent/worktree"
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 cleanup() {
   git -C "$repo_root" worktree remove --force "$temp_worktree" >/dev/null 2>&1 || true
   rm -rf "$temp_parent"

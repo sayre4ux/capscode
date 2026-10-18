@@ -49,12 +49,12 @@ expected_now=$(node -e 'const n=Number(process.argv[1]); process.stdout.write(ne
 published=$(published_at_for 1.3.0 "$TEMP/time.json")
 integrity=sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
 write_lock_entry "$LOCK" codex 1.3.0 "$integrity" "$expected_now" "$published" latest 'urgent security fix'
-rg -Fq 'version = "1.3.0"' "$LOCK"
-rg -Fq 'resolved_before = "'"$expected_now"'"' "$LOCK"
-rg -Fq 'cooldown_waived = "urgent security fix"' "$LOCK"
-rg -Fq 'smoke = "none"' "$LOCK"
-rg -Fq 'smoke_arch = []' "$LOCK"
-rg -Fq 'home_exec_paths = ["/home/agent/.cache/*"]' "$LOCK"
+grep -Fq 'version = "1.3.0"' "$LOCK"
+grep -Fq 'resolved_before = "'"$expected_now"'"' "$LOCK"
+grep -Fq 'cooldown_waived = "urgent security fix"' "$LOCK"
+grep -Fq 'smoke = "none"' "$LOCK"
+grep -Fq 'smoke_arch = []' "$LOCK"
+grep -Fq 'home_exec_paths = ["/home/agent/.cache/*"]' "$LOCK"
 
 cat >"$TEMP/noop.lock.toml" <<'TOML'
 schema = 1
