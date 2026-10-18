@@ -31,11 +31,12 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
-      - if: matrix.os == 'macos-latest'
-        run: /bin/bash scripts/ci/shell-tests.sh
       # The installer's binary path against a local mirror, with the real CLI as the
       # "release binary" (on macOS this also exercises the code-signature check).
       - run: cargo build --locked -p capscode && bash scripts/test-install.sh --binary target/debug/capscode
+      # After the build: on macOS the installer test needs the real CLI.
+      - if: matrix.os == 'macos-latest'
+        run: /bin/bash scripts/ci/shell-tests.sh
 
   toolchain-smoke:
     name: Build and smoke toolchain images
