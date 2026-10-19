@@ -4,7 +4,7 @@
   "cli": {
     "version": "0.1.0",
     "tag": "v0.1.0",
-    "commit": "c4c7e8ed88feafca72d9de67683c779a05832df3",
+    "commit": "f08c6cb9cb04079a21698dcae305b3d01e4736ab",
     "min_toolchain_sequence": 1,
     "notes_url": "https://github.com/sayre4ux/capscode/releases/tag/v0.1.0",
     "yanked_versions": []
