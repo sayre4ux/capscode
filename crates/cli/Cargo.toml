@@ -56,6 +56,10 @@ rustls = { workspace = true }
 # file itself after validating the entry, and never calls tar's own unpack.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 tar = { version = "0.4", default-features = false }
+# Declared directly only to turn on `static`: libgit2 needs zlib, and without this
+# libz-sys links the build host's libz.so.1, which a minimal Linux host may lack.
+# Feature unification makes libgit2 use the same static zlib.
+libz-sys = { version = "1.1", default-features = false, features = ["libc", "static"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 whoami = "1"

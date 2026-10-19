@@ -416,6 +416,7 @@ dependencies = [
  "indicatif",
  "keyring",
  "libc",
+ "libz-sys",
  "rustls",
  "secrecy",
  "serde",
