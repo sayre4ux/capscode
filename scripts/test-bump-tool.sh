@@ -95,4 +95,35 @@ ahead_after=$(shasum -a 256 "$TEMP/ahead.lock.toml" | awk '{print $1}')
 grep -Fq 'no eligible latest version is at least 3 days old and not below the current pin 1.4.0; lock left unchanged' "$TEMP/ahead.out"
 [[ ! -s "$TEMP/ahead.err" ]] || { cat "$TEMP/ahead.err" >&2; exit 1; }
 
+# npm metadata larger than the OS argument limits (codex's is ~300 KiB) must still bump.
+node - "$TEMP/time.json" >"$TEMP/big-time.json" <<'NODE'
+const times = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+for (let i = 0; i < 40000; i++) times[`0.0.${i}-padding`] = '2020-01-01T00:00:00.000Z';
+process.stdout.write(JSON.stringify(times));
+NODE
+(($(wc -c <"$TEMP/big-time.json") > 1100000)) || { echo "big time JSON is too small to test argv limits" >&2; exit 1; }
+cat >"$TEMP/big.lock.toml" <<'TOML'
+schema = 1
+
+[tools]
+codex = { package = "@openai/codex", version = "1.0.0", integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==", resolved_before = "2024-01-01T00:00:00Z", channel = "latest", smoke = "ci", smoke_date = "2024-01-01", smoke_arch = ["amd64"], home_exec_paths = [] }
+TOML
+LOCK=$TEMP/big.lock.toml
+npm() {
+  case "$*" in
+    *" time --json") cat "$TEMP/big-time.json" ;;
+    *" versions --json") cat "$TEMP/versions.json" ;;
+    *" dist-tags.latest") printf '%s\n' 1.3.0 ;;
+    *" dist.integrity") printf '%s\n' sha512-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB== ;;
+    *) echo "unexpected npm arguments: $*" >&2; return 2 ;;
+  esac
+}
+# ROOT points at a copy so the Dockerfile ARG rewrite stays out of the checkout.
+mkdir -p "$TEMP/root/images"
+printf 'ARG CODEX_VERSION=1.0.0\n' >"$TEMP/root/images/capsule.codex.Dockerfile"
+(ROOT=$TEMP/root main codex --latest --cooldown-days 3 >"$TEMP/big.out")
+grep -Fxq 'ARG CODEX_VERSION=1.2.0' "$TEMP/root/images/capsule.codex.Dockerfile"
+grep -Fq 'codex: 1.0.0 -> 1.2.0' "$TEMP/big.out"
+grep -Fq 'version = "1.2.0"' "$LOCK"
+
 echo 'PASS bump-tool cooldown selection, monotonic pins, no-op stability, and lock metadata'

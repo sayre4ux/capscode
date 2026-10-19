@@ -157,7 +157,8 @@ write_lock_entry() {
       }' "$lock"
 }
 
-main() {
+# Runs in a subshell so the EXIT trap cleans up the npm metadata files on every return.
+main() (
   if (($# < 1)); then
     echo "usage: $0 <tool> <version|--latest> [--cooldown-days N] [--waive-cooldown \"<reason>\"]" >&2
     return 2
@@ -191,12 +192,17 @@ main() {
   [[ -n "$channel" ]] || channel=latest
   [[ -n "$package" ]] || { echo "!! no npm package for $tool in $LOCK" >&2; return 1; }
 
-  local now_epoch time_json version versions_json dist_tag integrity before published waived selection_output selection_status
+  local work now_epoch time_json version versions_json dist_tag integrity before published waived selection_output selection_status
+  # npm metadata goes to files, not argv: Linux caps one argument at 128 KiB and codex's time JSON is larger.
+  work=$(mktemp -d "${TMPDIR:-/tmp}/capscode-bump.XXXXXX")
+  trap 'rm -rf -- "$work"' EXIT
+  time_json=$work/time.json
+  versions_json=$work/versions.json
   now_epoch=$(date -u +%s)
-  time_json=$(npm view "$package" time --json)
+  npm view "$package" time --json >"$time_json"
   if [[ "$request" == "--latest" ]]; then
     dist_tag=$(npm view "$package" "dist-tags.$channel")
-    versions_json=$(npm view "$package" versions --json)
+    npm view "$package" versions --json >"$versions_json"
     if [[ -n "$waive_reason" ]]; then
       version=$dist_tag
       ensure_version_old_enough "$version" "$time_json" "$now_epoch" "$cooldown_days" "$waive_reason"
@@ -251,7 +257,7 @@ main() {
   echo "  resolved_before $before"
   if [[ -n "$waive_reason" ]]; then echo "  cooldown_waived $waive_reason"; fi
   echo "  smoke           none (run ./scripts/smoke-tui.sh $tool --record after building)"
-}
+)
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   main "$@"
