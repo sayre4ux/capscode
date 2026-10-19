@@ -796,9 +796,6 @@ pub fn resolve_run(mut args: RunArgs, runtime: Option<RuntimeArg>) -> Result<Res
     crate::session::timing::prelude_lap("config-load");
     // Flag beats config in both directions; both flags together is an error.
     config.workspace.mode = resolve_workspace_mode(args.mount, args.copy, config.workspace.mode)?;
-    // Keep the legacy git.mount mirror in lockstep until the bind-mount path
-    // Keep the legacy field in sync with the selected workspace mode.
-    config.git.mount = matches!(config.workspace.mode, WorkspaceMode::Mount);
     config.git.history = args.history.into();
     config.git.include = args.include;
 

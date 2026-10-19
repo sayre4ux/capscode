@@ -75,8 +75,8 @@ pub enum NetError {
 pub enum ConfigError {
     #[error("config error: {0}")]
     Figment(#[from] figment::Error),
-    #[error("config migration failed: {0}")]
-    Migration(String),
+    #[error("config home unavailable: {0}")]
+    Home(String),
     #[error("invalid value for {field}: {reason}")]
     Invalid { field: String, reason: String },
 }

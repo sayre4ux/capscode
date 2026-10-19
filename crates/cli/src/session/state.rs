@@ -545,7 +545,6 @@ impl SessionDriver {
                                 seeder_image: self.options.seeder_image.clone(),
                                 history: self.options.config.git.history,
                                 include: self.options.config.git.include.clone(),
-                                mount: self.options.config.git.mount,
                                 verbose: self.options.verbose,
                             },
                             self.runtime.as_ref(),

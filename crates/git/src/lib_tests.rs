@@ -2139,7 +2139,6 @@ async fn test_ingress_rsync_fallback_creates_volume_and_content() {
         ),
         history: HistoryDial::Full,
         include: vec![],
-        mount: false,
         verbose: false,
     };
 
@@ -2241,7 +2240,6 @@ async fn test_full_ingress_egress_apply_verify_live() {
         ),
         history: HistoryDial::Full,
         include: vec![],
-        mount: false,
         verbose: false,
     };
 

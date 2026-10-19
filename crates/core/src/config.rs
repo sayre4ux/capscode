@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use figment::providers::{Env, Format, Serialized, Toml};
@@ -498,8 +498,6 @@ pub struct GitConfig {
     pub history: HistoryDial,
     /// Untracked files explicitly re-included.
     pub include: Vec<PathBuf>,
-    /// `--mount` convenience mode.
-    pub mount: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -542,12 +540,13 @@ impl Config {
         Self::config_home().join("config.toml")
     }
 
-    /// Runs the one-time legacy migration and prepares the config home for a write.
+    /// Creates the private config home if needed and returns the config file path.
     #[allow(clippy::result_large_err)]
     pub fn prepare_config_file() -> Result<PathBuf, ConfigError> {
         let config_home = Self::config_home();
-        migrate_legacy_if_needed(&config_home)?;
-        ensure_private_dir(&config_home).map_err(|error| migration_error(&config_home, error))?;
+        ensure_private_dir(&config_home).map_err(|error| {
+            ConfigError::Home(format!("preparing {}: {error}", config_home.display()))
+        })?;
         Ok(config_home.join("config.toml"))
     }
 
@@ -581,265 +580,13 @@ impl Config {
     }
 }
 
-fn legacy_config_home() -> Option<PathBuf> {
-    directories::ProjectDirs::from("", "", "capscode").map(|dirs| dirs.config_dir().to_path_buf())
-}
-
-#[allow(clippy::result_large_err)]
-fn migrate_legacy_if_needed(config_home: &Path) -> Result<(), ConfigError> {
-    let Some(legacy_home) = legacy_config_home() else {
-        return Ok(());
-    };
-    migrate_config_home(&legacy_home, config_home).map_err(|error| {
-        ConfigError::Migration(format!(
-            "{} to {}: {error}",
-            legacy_home.display(),
-            config_home.display()
-        ))
-    })
-}
-
-fn migration_error(config_home: &Path, error: io::Error) -> ConfigError {
-    ConfigError::Migration(format!("preparing {}: {error}", config_home.display()))
-}
-
 fn vpn_dir_for(home: &Path) -> PathBuf {
     home.join("vpn")
-}
-
-/// Called through the single `Config::prepare_config_file` migration chokepoint before
-/// configuration is read or written.
-fn migrate_config_home(legacy_home: &Path, new_home: &Path) -> io::Result<()> {
-    let legacy_config = legacy_home.join("config.toml");
-    let new_config = new_home.join("config.toml");
-    if new_config.exists() || !legacy_config.is_file() || legacy_home == new_home {
-        return Ok(());
-    }
-
-    // Compute the final config.toml content up front (rewriting an in-legacy-home
-    // `wireguard_conf` to the new home). config.toml is written last, atomically, so any
-    // failure mid-migration leaves new_home/config.toml absent and the whole migration
-    // retries cleanly instead of stranding a stale pointer.
-    let config_contents = match rewritten_config(&legacy_config, legacy_home, new_home)? {
-        Some(rewritten) => rewritten,
-        None => fs::read_to_string(&legacy_config)?,
-    };
-
-    ensure_private_dir(new_home)?;
-
-    // Move every capscode-owned entry except config.toml — vpn/, providers.yaml, and any
-    // other state — so nothing in the legacy home is silently abandoned.
-    for entry in fs::read_dir(legacy_home)? {
-        let entry = entry?;
-        if entry.file_name() == "config.toml" {
-            continue;
-        }
-        let source = entry.path();
-        let destination = new_home.join(entry.file_name());
-        if source.is_dir() {
-            move_directory_without_overwrite(&source, &destination)?;
-        } else {
-            move_without_overwrite(&source, &destination)?;
-        }
-    }
-
-    let new_vpn = vpn_dir_for(new_home);
-    if new_vpn.exists() {
-        secure_vpn_tree(&new_vpn)?;
-    }
-
-    write_config_atomically(new_home, &new_config, &config_contents)?;
-    let _ = fs::remove_file(&legacy_config);
-    Ok(())
-}
-
-/// Writes `config.toml` via a temp file + atomic rename within the (same-filesystem) home,
-/// so the destination only ever appears fully written — never a stale or partial file.
-fn write_config_atomically(home: &Path, destination: &Path, contents: &str) -> io::Result<()> {
-    let temp = home.join(".config.toml.migrating");
-    let _ = fs::remove_file(&temp);
-    {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&temp)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
-    }
-    fs::rename(&temp, destination)
-}
-
-fn rewritten_config(
-    config_path: &Path,
-    legacy_home: &Path,
-    new_home: &Path,
-) -> io::Result<Option<String>> {
-    let contents = fs::read_to_string(config_path)?;
-    let mut document = toml::from_str::<toml::Value>(&contents)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let Some(path) = document
-        .get("network")
-        .and_then(toml::Value::as_table)
-        .and_then(|network| network.get("wireguard_conf"))
-        .and_then(toml::Value::as_str)
-        .map(PathBuf::from)
-    else {
-        return Ok(None);
-    };
-    if !path.is_absolute() {
-        return Ok(None);
-    }
-    let Ok(relative) = path.strip_prefix(legacy_home) else {
-        return Ok(None);
-    };
-    if relative
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Ok(None);
-    }
-    let migrated_path = new_home.join(relative);
-    let migrated_path = migrated_path.to_str().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "migrated WireGuard path is not valid UTF-8",
-        )
-    })?;
-    document["network"]["wireguard_conf"] = toml::Value::String(migrated_path.to_string());
-    toml::to_string_pretty(&document)
-        .map(Some)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-}
-
-fn move_without_overwrite(source: &Path, destination: &Path) -> io::Result<()> {
-    if destination.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("refusing to overwrite {}", destination.display()),
-        ));
-    }
-    match fs::rename(source, destination) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
-            if let Err(copy_error) = copy_path(source, destination) {
-                remove_copied_path(destination);
-                return Err(copy_error);
-            }
-            if source.is_dir() {
-                fs::remove_dir_all(source)
-            } else {
-                fs::remove_file(source)
-            }
-        }
-        Err(error) => Err(error),
-    }
-}
-
-fn move_directory_without_overwrite(source: &Path, destination: &Path) -> io::Result<()> {
-    ensure_no_conflicts(source, destination)?;
-    if !destination.exists() {
-        return move_without_overwrite(source, destination);
-    }
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        if source_path.is_dir() && destination_path.is_dir() {
-            move_directory_without_overwrite(&source_path, &destination_path)?;
-        } else {
-            move_without_overwrite(&source_path, &destination_path)?;
-        }
-    }
-    fs::remove_dir(source)
-}
-
-fn ensure_no_conflicts(source: &Path, destination: &Path) -> io::Result<()> {
-    if !destination.exists() {
-        return Ok(());
-    }
-    if !source.is_dir() || !destination.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("refusing to overwrite {}", destination.display()),
-        ));
-    }
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        ensure_no_conflicts(&entry.path(), &destination.join(entry.file_name()))?;
-    }
-    Ok(())
-}
-
-fn copy_path(source: &Path, destination: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(source)?;
-    if metadata.is_dir() {
-        fs::create_dir(destination)?;
-        fs::set_permissions(destination, metadata.permissions())?;
-        for entry in fs::read_dir(source)? {
-            let entry = entry?;
-            copy_path(&entry.path(), &destination.join(entry.file_name()))?;
-        }
-        return Ok(());
-    }
-    if !metadata.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("cannot migrate non-file path {}", source.display()),
-        ));
-    }
-
-    let mut reader = File::open(source)?;
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    // Create with the source's permissions from the start so a private key is never
-    // briefly world-readable through the umask before set_permissions runs.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        options.mode(metadata.permissions().mode() & 0o7777);
-    }
-    let mut writer = options.open(destination)?;
-    let copied = io::copy(&mut reader, &mut writer)?;
-    writer.flush()?;
-    writer.sync_all()?;
-    if copied != metadata.len() {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            format!("incomplete copy of {}", source.display()),
-        ));
-    }
-    fs::set_permissions(destination, metadata.permissions())
-}
-
-fn remove_copied_path(path: &Path) {
-    if path.is_dir() {
-        let _ = fs::remove_dir_all(path);
-    } else {
-        let _ = fs::remove_file(path);
-    }
 }
 
 fn ensure_private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
     tighten_permissions(path, 0o700)
-}
-
-fn secure_vpn_tree(path: &Path) -> io::Result<()> {
-    tighten_permissions(path, 0o700)?;
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            secure_vpn_tree(&path)?;
-        } else if path
-            .extension()
-            .is_some_and(|extension| extension == "conf")
-        {
-            tighten_permissions(&path, 0o600)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(unix)]
@@ -1114,75 +861,25 @@ mod tests {
     }
 
     #[test]
-    fn migrates_legacy_config_and_vpn_once() {
+    fn prepare_config_file_creates_a_private_home() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let root = tempfile::tempdir().unwrap();
-        let legacy_home = root.path().join("legacy");
-        let legacy_vpn = vpn_dir_for(&legacy_home);
-        let new_home = root.path().join("new-home");
-        fs::create_dir_all(&legacy_vpn).unwrap();
-        let legacy_conf = legacy_vpn.join("x.conf");
-        fs::write(&legacy_conf, "[Interface]\nPrivateKey = test\n").unwrap();
-        fs::write(legacy_home.join("providers.yaml"), "providers: []\n").unwrap();
-        fs::write(
-            legacy_home.join("config.toml"),
-            format!(
-                "[network]\nwireguard_conf = {:?}\ntelemetry_sinkhole = false\n",
-                legacy_conf.to_str().unwrap()
-            ),
-        )
-        .unwrap();
+        let home = root.path().join("capscode-home");
+        let _capscode_home = EnvGuard::set("CAPSCODE_HOME", Some(home.as_os_str()));
 
-        migrate_config_home(&legacy_home, &new_home).unwrap();
+        let config_file = Config::prepare_config_file().unwrap();
 
-        let new_config = new_home.join("config.toml");
-        let new_conf = vpn_dir_for(&new_home).join("x.conf");
-        assert!(new_config.is_file());
-        assert!(new_conf.is_file());
-        assert!(!legacy_home.join("config.toml").exists());
-        assert!(!legacy_vpn.exists());
-        assert_eq!(
-            fs::read_to_string(new_home.join("providers.yaml")).unwrap(),
-            "providers: []\n"
-        );
-        assert!(!legacy_home.join("providers.yaml").exists());
-        let migrated: toml::Value =
-            toml::from_str(&fs::read_to_string(&new_config).unwrap()).unwrap();
-        assert_eq!(
-            migrated["network"]["wireguard_conf"].as_str(),
-            new_conf.to_str()
-        );
-        assert_eq!(
-            migrated["network"]["telemetry_sinkhole"].as_bool(),
-            Some(false)
-        );
-
+        assert_eq!(config_file, home.join("config.toml"));
+        assert!(home.is_dir());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
 
             assert_eq!(
-                fs::metadata(&new_home).unwrap().permissions().mode() & 0o777,
+                fs::metadata(&home).unwrap().permissions().mode() & 0o777,
                 0o700
-            );
-            assert_eq!(
-                fs::metadata(vpn_dir_for(&new_home))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o700
-            );
-            assert_eq!(
-                fs::metadata(&new_conf).unwrap().permissions().mode() & 0o777,
-                0o600
             );
         }
-
-        let first_migration = fs::read(&new_config).unwrap();
-        fs::write(legacy_home.join("config.toml"), "runtime = \"orbstack\"\n").unwrap();
-        migrate_config_home(&legacy_home, &new_home).unwrap();
-        assert_eq!(fs::read(&new_config).unwrap(), first_migration);
-        assert!(legacy_home.join("config.toml").exists());
     }
 
     #[test]

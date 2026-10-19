@@ -331,7 +331,6 @@ pub struct IngressPlan {
     pub seeder_image: ImageRef,
     pub history: HistoryDial,
     pub include: Vec<PathBuf>,
-    pub mount: bool,
     pub verbose: bool,
 }
 

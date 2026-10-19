@@ -14,7 +14,6 @@ publish = false
 [dependencies]
 async-trait = { workspace = true }
 bollard = { workspace = true }
-directories = { workspace = true }
 figment = { workspace = true }
 git2 = { workspace = true }
 secrecy = { workspace = true }

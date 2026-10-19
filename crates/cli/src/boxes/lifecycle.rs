@@ -105,7 +105,6 @@ pub(crate) async fn create(
         capscode_core::WorkspaceMode::Copy
     };
     config.workspace.mode = workspace_mode;
-    config.git.mount = workspace_mode == capscode_core::WorkspaceMode::Mount;
     entry.mode = workspace_mode.as_str().to_owned();
     print_creation(&routed, &defaults);
     let (selected, credential, extras) = split_credentials(routed)?;
@@ -178,7 +177,6 @@ pub(crate) async fn create(
                 seeder_image: options.seeder_image.clone(),
                 history: options.config.git.history,
                 include: options.config.git.include.clone(),
-                mount: false,
                 verbose: options.verbose,
             },
             runtime.as_ref(),
@@ -492,7 +490,6 @@ async fn provision_existing_box(
         "mount" => capscode_core::WorkspaceMode::Mount,
         _ => bail!("box has an unknown workspace mode; run `capscode ls` to refresh its metadata"),
     };
-    config.git.mount = config.workspace.mode == capscode_core::WorkspaceMode::Mount;
     let network: Arc<dyn NetworkStack> =
         Arc::new(capscode_net::NetStack::new(config.network.clone()));
     let git: Arc<dyn GitEngine> = Arc::new(capscode_git::DefaultGitEngine::new());
