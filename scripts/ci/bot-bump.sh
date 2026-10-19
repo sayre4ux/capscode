@@ -57,6 +57,9 @@ cd "$ROOT"
 [[ -n "${GITHUB_REPOSITORY:-}" ]] || fail 'GITHUB_REPOSITORY is required outside dry-run mode'
 [[ -n "${GH_TOKEN:-}" ]] || fail 'GH_TOKEN is required outside dry-run mode'
 
+# Set before the merge below, which commits when the bump branch already exists.
+git config user.name 'github-actions[bot]'
+git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 git fetch --no-tags origin main
 if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
   git fetch --no-tags origin "$BRANCH"
@@ -136,14 +139,11 @@ for tool in claude codex opencode pi omp; do
 done
 
 git add "$LOCK"
-if git diff --cached --quiet; then
-  printf '%s\n' 'Candidate lock has no changes after smoke metadata update.'
-  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then printf 'changed=false\n' >>"$GITHUB_OUTPUT"; fi
-  exit 0
+# A same-day rerun on an existing branch stages nothing new, but the lock still differs from main
+# and the merge of main above must reach the PR, so keep going.
+if ! git diff --cached --quiet; then
+  git commit -m 'Update tested toolchain pins'
 fi
-git config user.name 'github-actions[bot]'
-git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-git commit -m 'Update tested toolchain pins'
 git push --set-upstream origin "$BRANCH"
 
 pr_number=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
