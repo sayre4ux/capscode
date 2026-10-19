@@ -7,13 +7,15 @@ repository=${GITHUB_REPOSITORY:-}
   exit 1
 }
 
-checks=$(gh api "repos/$repository/branches/main/protection/required_status_checks") || {
+# main is protected by a ruleset; the classic branch protection endpoint reports it as unprotected.
+rules=$(gh api --paginate "repos/$repository/rules/branches/main") || {
   printf '%s\n' 'Could not read required checks for main; refusing to enable auto-merge' >&2
   exit 1
 }
-# DECISION: branch protection may report a stable job ID or its matrix/display name.
-if ! printf '%s\n' "$checks" | jq -e '
-  ((.contexts // []) + ((.checks // []) | map(.context // empty)))
+# DECISION: a ruleset may name a check by its stable job ID or its matrix/display name.
+if ! printf '%s\n' "$rules" | jq -e -s '
+  [add // [] | .[] | select(.type == "required_status_checks")
+    | .parameters.required_status_checks[]?.context]
   | map(ascii_downcase) as $names
   | any($names[]; . == "rust" or startswith("rust checks") or startswith("ci / rust"))
     and any($names[]; contains("toolchain") and contains("smoke"))

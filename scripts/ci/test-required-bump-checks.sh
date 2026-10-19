@@ -11,19 +11,21 @@ cat "$GH_CHECKS_FIXTURE"
 FAKE
 chmod +x "$TEMP/bin/gh"
 
-cat >"$TEMP/valid.json" <<'JSON'
-{"contexts":["Rust checks (ubuntu-latest)","Build and smoke toolchain images"]}
-JSON
-cat >"$TEMP/missing-smoke.json" <<'JSON'
-{"contexts":["Rust checks (ubuntu-latest)","Build gateway image"]}
-JSON
-cat >"$TEMP/missing-rust.json" <<'JSON'
-{"checks":[{"context":"toolchain-smoke"}]}
-JSON
+required() {
+  local contexts=$1
+  printf '[{"type":"deletion","ruleset_source_type":"Repository","ruleset_source":"owner/repo","ruleset_id":1},'
+  printf '{"type":"required_status_checks","ruleset_source_type":"Repository","ruleset_source":"owner/repo","ruleset_id":1,'
+  printf '"parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[%s]}}]\n' "$contexts"
+}
+required '{"context":"Rust checks (ubuntu-latest)"},{"context":"Build and smoke toolchain images","integration_id":15368}' >"$TEMP/valid.json"
+required '{"context":"Rust checks (ubuntu-latest)"},{"context":"Build gateway image"}' >"$TEMP/missing-smoke.json"
+required '{"context":"toolchain-smoke"}' >"$TEMP/missing-rust.json"
+printf '%s\n' '[{"type":"deletion","ruleset_source_type":"Repository","ruleset_source":"owner/repo","ruleset_id":1}]' >"$TEMP/no-checks-rule.json"
+printf '%s\n' '[]' >"$TEMP/no-rules.json"
 
 GH_CHECKS_FIXTURE="$TEMP/valid.json" PATH="$TEMP/bin:$PATH" GITHUB_REPOSITORY=owner/repo \
   "$ROOT/scripts/ci/verify-required-bump-checks.sh" >/dev/null
-for fixture in missing-smoke missing-rust; do
+for fixture in missing-smoke missing-rust no-checks-rule no-rules; do
   if GH_CHECKS_FIXTURE="$TEMP/$fixture.json" PATH="$TEMP/bin:$PATH" GITHUB_REPOSITORY=owner/repo \
     "$ROOT/scripts/ci/verify-required-bump-checks.sh" >"$TEMP/$fixture.out" 2>&1; then
     printf 'Accepted required-check fixture missing %s\n' "$fixture" >&2

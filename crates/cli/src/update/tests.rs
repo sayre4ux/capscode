@@ -16,7 +16,7 @@ use super::state::{self, CheckState, UpdateState};
 use super::*;
 use crate::toolchain::{self, ResolvedLock};
 
-const BUILTIN: &str = include_str!("../../../../images/toolchain.lock.toml");
+const BUILTIN: &str = crate::toolchain::BUILTIN_LOCK;
 const CHANNEL: &str = "sayre4ux/capscode";
 const NOW: u64 = 1_800_000_000;
 
