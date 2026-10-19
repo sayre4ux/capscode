@@ -275,7 +275,7 @@ mod tests {
     fn the_shipped_lock_is_used_only_for_the_same_toolchain() {
         let temp = tempfile::tempdir().unwrap();
         let root = source_tree(&temp.path().join("ctx"));
-        let builtin = include_str!("../../../images/toolchain.lock.toml");
+        let builtin = crate::toolchain::BUILTIN_LOCK;
         std::fs::write(root.join(LOCK), builtin).unwrap();
         let files = BuildFiles {
             script: root.join(SCRIPT),

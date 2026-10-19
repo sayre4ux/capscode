@@ -14,7 +14,12 @@ use base64::Engine;
 use capscode_core::Config;
 use serde::{Deserialize, Serialize};
 
-const BUILTIN_LOCK: &str = include_str!("../../../images/toolchain.lock.toml");
+const SHIPPED_LOCK: &str = include_str!("../../../images/toolchain.lock.toml");
+#[cfg(not(test))]
+const BUILTIN_LOCK: &str = SHIPPED_LOCK;
+// Unit tests run against a frozen copy so a toolchain bump does not change their expectations.
+#[cfg(test)]
+pub(crate) const BUILTIN_LOCK: &str = include_str!("../testdata/toolchain.lock.toml");
 const LOCK_SCHEMA: u32 = 1;
 const BUILTIN_SOURCE: &str = "built-in";
 // Bump when the CLI and capsule entrypoint/keeper environment contract changes.
@@ -884,8 +889,10 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let helper = root.join("scripts/lib/toolchain-lock.sh");
         let temp = tempfile::tempdir().unwrap();
-        let shipped = builtin_lock().unwrap();
-        check_digest(BUILTIN_LOCK, &digest(&shipped), temp.path(), &helper);
+        let shipped = parse_validated(SHIPPED_LOCK).unwrap();
+        check_digest(SHIPPED_LOCK, &digest(&shipped), temp.path(), &helper);
+        let builtin = builtin_lock().unwrap();
+        check_digest(BUILTIN_LOCK, &digest(&builtin), temp.path(), &helper);
 
         let fixture_text = BUILTIN_LOCK
             .replacen(
@@ -895,7 +902,7 @@ mod tests {
             )
             .replacen("bun_version = \"1.3.14\"", "bun_version = \"1.3.15\"", 1);
         let fixture = parse_validated(&fixture_text).unwrap();
-        assert_ne!(digest(&shipped), digest(&fixture));
+        assert_ne!(digest(&builtin), digest(&fixture));
         check_digest(&fixture_text, &digest(&fixture), temp.path(), &helper);
     }
 
@@ -1047,8 +1054,8 @@ mod release_metadata_tests {
 
     #[test]
     fn built_in_lock_declares_release_metadata() {
-        let lock = builtin_lock().unwrap();
-        assert_eq!(lock.sequence, Some(1));
+        let lock = parse_validated(SHIPPED_LOCK).unwrap();
+        assert!(lock.sequence.is_some_and(|sequence| sequence >= 1));
         assert_eq!(
             lock.min_cli_version.as_deref(),
             Some(env!("CARGO_PKG_VERSION"))

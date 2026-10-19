@@ -6,7 +6,9 @@ TEMP=$(mktemp -d "${TMPDIR:-/tmp}/capscode-build-lock-test.XXXXXX")
 trap 'rm -rf -- "$TEMP"' EXIT
 source "$ROOT/scripts/lib/toolchain-lock.sh"
 
-cp "$ROOT/images/toolchain.lock.toml" "$TEMP/valid.lock.toml"
+toolchain_validate_lock "$ROOT/images/toolchain.lock.toml"
+# The rejection cases edit exact values, so they start from the frozen unit-test lock.
+cp "$ROOT/crates/cli/testdata/toolchain.lock.toml" "$TEMP/valid.lock.toml"
 toolchain_validate_lock "$TEMP/valid.lock.toml"
 
 rejects() {
