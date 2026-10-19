@@ -12,6 +12,7 @@ schema = 1
 
 [tools]
 codex = { package = "@openai/codex", version = "1.0.0", integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==", resolved_before = "2024-01-01T00:00:00Z", channel = "latest", smoke = "ci", smoke_date = "2024-01-01", smoke_arch = ["amd64"], home_exec_paths = ["/home/agent/.cache/*"] }
+opencode = { package = "opencode-ai", version = "1.0.0", integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==", resolved_before = "2024-01-01T00:00:00Z", channel = "latest", smoke = "ci", smoke_date = "2024-01-01", smoke_arch = ["amd64"], home_exec_paths = [] }
 TOML
 
 now=$(date -u +%s)
@@ -55,6 +56,9 @@ grep -Fq 'cooldown_waived = "urgent security fix"' "$LOCK"
 grep -Fq 'smoke = "none"' "$LOCK"
 grep -Fq 'smoke_arch = []' "$LOCK"
 grep -Fq 'home_exec_paths = ["/home/agent/.cache/*"]' "$LOCK"
+# Appending fields must keep the line break, or the next tool's entry is lost.
+[[ "$(field_from_lock_line "$(lock_line_for "$LOCK" opencode)" version)" == 1.0.0 ]] ||
+  { echo "writing the codex entry swallowed the opencode entry" >&2; exit 1; }
 
 cat >"$TEMP/noop.lock.toml" <<'TOML'
 schema = 1

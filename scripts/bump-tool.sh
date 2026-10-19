@@ -150,7 +150,7 @@ write_lock_entry() {
           if ($line =~ $pattern) {
             $line =~ s/$pattern/$replacement/;
           } else {
-            $line =~ s/\s*}\s*$/ , $replacement }/;
+            $line =~ s/\s*}[ \t]*$/, $replacement }/;
           }
         }
         $_ = $line;
