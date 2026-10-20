@@ -108,7 +108,7 @@ pub enum Command {
         /// Skip the confirmation prompt.
         #[arg(short = 'y', long)]
         yes: bool,
-        /// Delete box workspaces even if they hold work that is not synced to the host.
+        /// Delete box workspaces and kept file sync data even if they hold work the host does not have.
         #[arg(long)]
         discard_workspace: bool,
     },

@@ -1280,6 +1280,36 @@ async fn shadow_handoff_is_applied_before_identity_read_and_identity_failure_is_
     assert_eq!(*events.lock().unwrap(), ["apply", "identity"]);
 }
 
+#[tokio::test]
+async fn shadow_handoff_that_leaves_work_behind_never_records_the_box_synced() {
+    for left_behind in [ShadowOutcome::PartlyApplied, ShadowOutcome::Staged] {
+        let events = std::sync::Mutex::new(Vec::new());
+        let (outcome, identity) = apply_shadow_handoff_then_read_identity(
+            true,
+            || {
+                events.lock().unwrap().push("apply".to_owned());
+                Ok(left_behind)
+            },
+            || async {
+                events.lock().unwrap().push("identity".to_owned());
+                Ok(crate::boxes::SyncIdentity {
+                    oid: "commit-a".to_owned(),
+                    kind: "shadow".to_owned(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, left_behind);
+        assert!(
+            identity.is_none(),
+            "{left_behind:?} must not yield a sync identity"
+        );
+        assert_eq!(*events.lock().unwrap(), ["apply"]);
+    }
+}
+
 #[test]
 fn rm_messages_name_classic_sessions_and_only_offer_box_resume() {
     let objects = box_runtime_objects();
@@ -2220,4 +2250,40 @@ fn ls_marks_a_box_on_a_withdrawn_toolchain_as_yanked() {
     );
     row.toolchain_yanked = false;
     assert_eq!(toolchain_row_label(&row), "fb24882 (pinned)");
+}
+
+#[test]
+fn uninstall_finds_kept_file_sync_data_in_session_state() {
+    let home = tempfile::tempdir().unwrap();
+    assert!(
+        kept_handoff_data(home.path()).is_empty(),
+        "a home without a sessions dir keeps nothing"
+    );
+
+    let sessions = home.path().join("sessions");
+    let staged = sessions.join("a-staged");
+    fs::create_dir_all(staged.join("staging/src")).unwrap();
+    fs::write(staged.join("staging/src/notes.md"), "capsule edit").unwrap();
+    let retired = sessions.join("b-retired");
+    fs::create_dir_all(retired.join("previous-handoff.1/backup")).unwrap();
+    fs::write(
+        retired.join("previous-handoff.1/backup/main.rs"),
+        "host original",
+    )
+    .unwrap();
+    let receipt_only = sessions.join("c-receipt-only");
+    fs::create_dir_all(receipt_only.join("staging")).unwrap();
+    fs::write(receipt_only.join("receipt.json"), "{}").unwrap();
+
+    let kept = kept_handoff_data(home.path());
+    let dirs = kept
+        .iter()
+        .map(|kept| kept.state_dir.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        dirs,
+        [staged, retired],
+        "an empty staging dir holds no work"
+    );
+    assert!(kept[0].detail.starts_with("1 staged"));
 }

@@ -2383,6 +2383,9 @@ async fn capture_rm_session(
                     ShadowOutcome::Applied => {
                         data(format!("Copied back session {session} before removal."));
                     }
+                    ShadowOutcome::PartlyApplied => data(format!(
+                        "Copied back part of session {session} before removal; the rest is staged on the host, not applied."
+                    )),
                     ShadowOutcome::Staged if unsupported => data(format!(
                         "Session {session} has work that was not captured. Its file sync export was kept."
                     )),
@@ -2577,6 +2580,70 @@ fn session_state_handoff_data(state_dir: &Path) -> Result<Vec<PathBuf>> {
     }
     protected.sort();
     Ok(protected)
+}
+
+/// A session state directory holding file sync data that `uninstall` would delete.
+#[derive(Debug, PartialEq, Eq)]
+struct KeptHandoff {
+    state_dir: PathBuf,
+    detail: String,
+}
+
+/// Find session state directories that hold staged, backup, or previous handoff data.
+///
+/// That data can be the only host copy of work a sync did not apply (staging) or of
+/// host files a sync overwrote (backup), and `rm` deliberately keeps it for review.
+/// A directory that cannot be inspected counts as holding data.
+fn kept_handoff_data(home: &Path) -> Vec<KeptHandoff> {
+    let sessions = home.join("sessions");
+    let unreadable = |error: &dyn std::fmt::Display| KeptHandoff {
+        state_dir: sessions.clone(),
+        detail: format!("cannot list session state: {error}"),
+    };
+    let entries = match fs::read_dir(&sessions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => return vec![unreadable(&error)],
+    };
+    let mut kept = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                kept.push(unreadable(&error));
+                continue;
+            }
+        };
+        let state_dir = entry.path();
+        // A symlink is not followed: removing the config home removes only the link.
+        match entry.file_type() {
+            Ok(file_type) if file_type.is_dir() => {}
+            Ok(_) => continue,
+            Err(error) => {
+                kept.push(KeptHandoff {
+                    state_dir,
+                    detail: format!("cannot inspect: {error}"),
+                });
+                continue;
+            }
+        }
+        match session_state_handoff_data(&state_dir) {
+            Ok(paths) if paths.is_empty() => {}
+            Ok(paths) => kept.push(KeptHandoff {
+                state_dir,
+                detail: format!(
+                    "{} staged, backup, or previous handoff path(s)",
+                    paths.len()
+                ),
+            }),
+            Err(error) => kept.push(KeptHandoff {
+                state_dir,
+                detail: format!("cannot inspect: {error:#}"),
+            }),
+        }
+    }
+    kept.sort_by(|left, right| left.state_dir.cmp(&right.state_dir));
+    kept
 }
 
 fn collect_handoff_paths(
@@ -2942,9 +3009,11 @@ pub async fn uninstall(
         crate::boxes::index::read().map(|entries| entries.len()),
     )?;
     let boxes = crate::boxes::workspaces_at_risk(&objects, runtime.as_deref()).await?;
+    let kept_handoffs = kept_handoff_data(&home);
     print_uninstall_plan(
         &objects,
         &boxes,
+        &kept_handoffs,
         &home,
         &completion_files,
         remove_images,
@@ -2961,6 +3030,17 @@ pub async fn uninstall(
             "uninstall would delete work in {at_risk} box(es) that is not on your machine: {}; \
              sync each box before uninstall, or rerun with --discard-workspace to delete it",
             risky_box_names(&boxes)
+        );
+    }
+    // DECISION: kept file sync data needs the same --discard-workspace override as box work,
+    // because staging can hold the only host copy of changes a sync did not apply.
+    if !kept_handoffs.is_empty() && !discard_workspace {
+        bail!(
+            "uninstall would delete file sync data kept in {} session state dir(s): changes a sync \
+             staged but did not apply, or backups of host files it overwrote; review them under {}, \
+             or rerun with --discard-workspace to delete them",
+            kept_handoffs.len(),
+            home.join("sessions").display()
         );
     }
     if !yes {
@@ -3069,6 +3149,7 @@ fn uninstall_runtime_pref(runtime_flag: Option<RuntimeArg>) -> RuntimePref {
 fn print_uninstall_plan(
     objects: &[OwnedObject],
     boxes: &[crate::boxes::BoxWorkspace],
+    kept_handoffs: &[KeptHandoff],
     home: &Path,
     completion_files: &[PathBuf],
     remove_images: bool,
@@ -3092,6 +3173,16 @@ fn print_uninstall_plan(
         }
     }
     data(format!("  Config home: {}", home.display()));
+    if !kept_handoffs.is_empty() {
+        data("  File sync data deleted with it:");
+        for kept in kept_handoffs {
+            data(format!(
+                "    {} ({})",
+                kept.state_dir.display(),
+                kept.detail
+            ));
+        }
+    }
     if completion_files.is_empty() {
         data("  Shell completion blocks: none");
     } else {
@@ -3242,7 +3333,7 @@ pub async fn sync(
                 box_name.is_some(),
             )
             .await?;
-            let recorded = !unsupported && !matches!(outcome, ShadowOutcome::Staged);
+            let recorded = !unsupported && outcome.left_nothing_behind();
             data(match outcome {
                 ShadowOutcome::NoChanges => {
                     format!(
@@ -3253,6 +3344,13 @@ pub async fn sync(
                 ShadowOutcome::Applied => {
                     format!(
                         "Handed off session {session} to {}; {}",
+                        host_repo.display(),
+                        stopped_sync_hint(box_name)
+                    )
+                }
+                ShadowOutcome::PartlyApplied => {
+                    format!(
+                        "Handed off part of session {session} to {}; the rest is staged, so the box is not marked synced; {}",
                         host_repo.display(),
                         stopped_sync_hint(box_name)
                     )
@@ -3402,7 +3500,9 @@ where
     // DECISION: apply the user's accepted handoff before reading identity, and leave the box
     // unsynced with a warning if that read fails after the host changes were applied.
     let outcome = apply()?;
-    let identity = if record_identity {
+    // Reading the identity can create the box's autosync baseline, so skip it for a
+    // round that leaves work behind and will not be recorded anyway.
+    let identity = if record_identity && outcome.left_nothing_behind() {
         match read_identity().await {
             Ok(identity) => Some(identity),
             Err(error) => {

@@ -14,7 +14,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use capscode_core::{ContainerId, RuntimeAdapter};
-use capscode_git::{apply_shadow_handoff, escape_shadow_path, ShadowHandoff};
+use capscode_git::{
+    apply_shadow_handoff, escape_shadow_path, ShadowApplyReport, ShadowChangeKind, ShadowHandoff,
+};
 use dialoguer::Confirm;
 
 use crate::ui::note;
@@ -24,12 +26,26 @@ use crate::ui::note;
 pub(crate) enum ShadowOutcome {
     /// The capture found no changes; nothing was staged and nothing applied.
     NoChanges,
-    /// Changes were staged and written to the host working tree.
+    /// Every change that can come back was written to the host working tree.
+    /// Capsule deletions may still be pending: they are reported, never applied.
     Applied,
+    /// Some clean files were written, but other work is still only in the
+    /// capsule and the staging directory: conflicts, failed or refused writes,
+    /// skipped implicit-runner files, or unsupported entries.
+    PartlyApplied,
     /// Changes were staged but NOT written — the user declined, the terminal was
     /// not interactive, or every change was a conflict. The staging directory
     /// holds the work.
     Staged,
+}
+
+impl ShadowOutcome {
+    /// Whether the host now holds everything this round could bring back, so the
+    /// box may be recorded as synced. `rm` and `uninstall` trust that record when
+    /// deciding whether deleting the box would lose work.
+    pub(crate) fn left_nothing_behind(self) -> bool {
+        matches!(self, Self::NoChanges | Self::Applied)
+    }
 }
 
 /// Stop the capsule, then take a fresh export of its workspace.
@@ -164,7 +180,47 @@ pub(crate) fn present_and_apply(
             handoff.state_dir.display()
         ));
     }
-    Ok(ShadowOutcome::Applied)
+    let open_conflicts = handoff
+        .conflicts
+        .iter()
+        .filter(|issue| {
+            !handoff
+                .changes
+                .iter()
+                .any(|change| change.path == issue.path && change.kind == ShadowChangeKind::Deleted)
+        })
+        .count();
+    Ok(applied_outcome(
+        handoff.clean_count(),
+        &report,
+        open_conflicts,
+        handoff.unsupported.len(),
+    ))
+}
+
+/// Whether an apply that wrote at least one file brought back everything it could.
+///
+/// Callers record a box as synced only on `Applied`, and `rm` and `uninstall`
+/// trust that record. So anything still left behind makes the round `PartlyApplied`.
+// DECISION: pending capsule deletions do not count as open work. They are never applied, so
+// counting them would keep a box unsynced forever, and removing the box loses no file content.
+fn applied_outcome(
+    clean_count: usize,
+    report: &ShadowApplyReport,
+    open_conflicts: usize,
+    unsupported: usize,
+) -> ShadowOutcome {
+    let complete = report.applied.len() == clean_count
+        && report.failed.is_empty()
+        && report.refused.is_empty()
+        && report.skipped_implicit_runners.is_empty()
+        && open_conflicts == 0
+        && unsupported == 0;
+    if complete {
+        ShadowOutcome::Applied
+    } else {
+        ShadowOutcome::PartlyApplied
+    }
 }
 
 fn join_paths(paths: &[std::path::PathBuf]) -> String {
@@ -211,5 +267,74 @@ pub(crate) fn print_shadow_changes(handoff: &ShadowHandoff) {
     let total = handoff.changes.len() + handoff.unsupported.len();
     if shown < total {
         note(format!("  … {} more entries omitted", total - shown));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use capscode_git::{ShadowApplyReport, ShadowIssue};
+
+    use super::{applied_outcome, ShadowOutcome};
+
+    fn report(applied: usize) -> ShadowApplyReport {
+        ShadowApplyReport {
+            applied: (0..applied)
+                .map(|index| PathBuf::from(format!("f{index}")))
+                .collect(),
+            refused: Vec::new(),
+            skipped_implicit_runners: Vec::new(),
+            failed: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_round_that_wrote_every_clean_file_is_applied() {
+        assert_eq!(applied_outcome(3, &report(3), 0, 0), ShadowOutcome::Applied);
+    }
+
+    #[test]
+    fn any_work_left_behind_makes_the_round_partly_applied() {
+        assert_eq!(
+            applied_outcome(3, &report(3), 1, 0),
+            ShadowOutcome::PartlyApplied,
+            "an open conflict stays only in the capsule and staging"
+        );
+        assert_eq!(
+            applied_outcome(3, &report(3), 0, 1),
+            ShadowOutcome::PartlyApplied,
+            "an unsupported entry was never captured"
+        );
+        assert_eq!(
+            applied_outcome(3, &report(2), 0, 0),
+            ShadowOutcome::PartlyApplied
+        );
+
+        let mut failed = report(2);
+        failed.failed.push(ShadowIssue {
+            path: PathBuf::from("late"),
+            reason: "host changed before apply".into(),
+        });
+        assert_eq!(
+            applied_outcome(3, &failed, 0, 0),
+            ShadowOutcome::PartlyApplied
+        );
+
+        let mut skipped = report(2);
+        skipped
+            .skipped_implicit_runners
+            .push(PathBuf::from(".envrc"));
+        assert_eq!(
+            applied_outcome(3, &skipped, 0, 0),
+            ShadowOutcome::PartlyApplied
+        );
+
+        let mut refused = report(2);
+        refused.refused.push(PathBuf::from(".git/config"));
+        assert_eq!(
+            applied_outcome(3, &refused, 0, 0),
+            ShadowOutcome::PartlyApplied
+        );
     }
 }
