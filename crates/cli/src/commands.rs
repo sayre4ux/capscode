@@ -1143,7 +1143,7 @@ pub fn provider_key_set(id: &str) -> Result<()> {
     data(format!(
         "Provider key for '{}' stored in keychain service '{}' (account '{}'). Environment variable {} still takes precedence.",
         spec.id,
-        keystore::SERVICE,
+        keystore::service(),
         keystore::ACCOUNT,
         spec.key_env
     ));

@@ -235,7 +235,7 @@ pub async fn init(args: InitArgs, runtime_flag: Option<RuntimeArg>) -> Result<()
                         "stored",
                         &format!(
                             "keychain service '{}' (account '{}')",
-                            keystore::SERVICE,
+                            keystore::service(),
                             keystore::ACCOUNT
                         ),
                         Some(Status::Ok),

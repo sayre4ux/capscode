@@ -83,7 +83,7 @@ pub(crate) struct ListedKey {
 }
 
 /// Keychain service for the provider-key bundle, honoring [`SERVICE_ENV`].
-fn service() -> String {
+pub(crate) fn service() -> String {
     std::env::var(SERVICE_ENV)
         .ok()
         .filter(|value| !value.is_empty())
