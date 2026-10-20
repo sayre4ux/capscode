@@ -29,11 +29,11 @@ artifact attestation. Verify it against this repository and the workflow that mu
 it:
 
 ```sh
-gh attestation verify capscode-0.1.0-macos-universal --repo sayre4ux/capscode \
+gh attestation verify capscode-0.1.1-macos-universal --repo sayre4ux/capscode \
   --signer-workflow sayre4ux/capscode/.github/workflows/release-cli.yml
-gh attestation verify capscode-0.1.0-build-context.tar.gz --repo sayre4ux/capscode \
+gh attestation verify capscode-0.1.1-build-context.tar.gz --repo sayre4ux/capscode \
   --signer-workflow sayre4ux/capscode/.github/workflows/release-cli.yml
-gh attestation verify capscode-0.1.0-src.tar.gz --repo sayre4ux/capscode \
+gh attestation verify capscode-0.1.1-src.tar.gz --repo sayre4ux/capscode \
   --signer-workflow sayre4ux/capscode/.github/workflows/release-cli.yml
 gh attestation verify toolchain.lock.toml --repo sayre4ux/capscode \
   --signer-workflow sayre4ux/capscode/.github/workflows/release-toolchain.yml

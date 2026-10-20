@@ -2,6 +2,20 @@
 
 This file follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.1.1] - 2026-10-20
+
+### Fixed
+
+- `uninstall` could delete the only copy of file sync changes that did not apply. A non-Git
+  `sync` that applied some files but left conflicts staged marked the box as synced, so
+  `uninstall` removed the box and `~/.capscode` without warning. A sync now marks a box synced
+  only when nothing is left behind (pending deletions aside), and says when it applied only part
+  of the work. `uninstall` also refuses while any session keeps staged changes, backups of
+  overwritten host files, or earlier handoffs under `~/.capscode/sessions`, unless you pass
+  `--discard-workspace`.
+- `capscode key set` and `capscode init` now name the keychain service the key was written to
+  when `CAPSCODE_KEYSTORE_SERVICE` overrides it.
+
 ## [0.1.0] - 2026-10-19
 
 First public release.
@@ -28,4 +42,5 @@ First public release.
   (`capscode provider`, `capscode config`), shell completions, and diagnostics
   (`capscode doctor`, `capscode doctor --quick`).
 
+[0.1.1]: https://github.com/sayre4ux/capscode/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sayre4ux/capscode/releases/tag/v0.1.0

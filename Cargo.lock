@@ -396,7 +396,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "capscode"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "capscode-broker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "capscode-core",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "capscode-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "bollard",
@@ -478,7 +478,7 @@ dependencies = [
 
 [[package]]
 name = "capscode-git"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "bollard",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "capscode-net"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "capscode-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "bollard",

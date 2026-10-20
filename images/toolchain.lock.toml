@@ -13,7 +13,7 @@ schema = 1
 # greater than the one they run. `min_cli_version` is the oldest CLI allowed to
 # use this lock. `yanked` lists withdrawn `tool@version` entries or digests.
 sequence = 3
-min_cli_version = "0.1.0"
+min_cli_version = "0.1.1"
 yanked = []
 
 [base]
