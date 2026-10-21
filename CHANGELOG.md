@@ -21,6 +21,9 @@ This file follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) f
   that command instead of failing.
 - After a non-Git `sync` writes files, `capscode` now says when it kept your file's mode
   although the box changed the file's executable bit.
+- A `create` that fails partway, for example because an image is not built, no longer leaves a
+  half-made box that `ls` lists and `rm` cannot check. It removes the containers, volumes, and
+  session state it had set up.
 
 ## [0.1.1] - 2026-10-20
 

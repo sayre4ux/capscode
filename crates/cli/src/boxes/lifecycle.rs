@@ -136,72 +136,87 @@ pub(crate) async fn create(
         verbose: false,
         r#box: Some(box_spec.clone()),
     };
-    let volume = if workspace_mode == capscode_core::WorkspaceMode::Copy {
-        let volume = VolumeId(format!("capscode-{}-workspace", session));
-        let mut volume_labels = vec![
-            (LABEL_OWNER.to_owned(), LABEL_OWNER_VALUE.to_owned()),
-            (LABEL_SESSION.to_owned(), session.to_string()),
-            (LABEL_ROLE.to_owned(), ROLE_CAPSULE.to_owned()),
-            (LABEL_CREATED.to_owned(), index::now()),
-            (LABEL_BOX.to_owned(), box_name.clone()),
-            (LABEL_BOX_ID.to_owned(), id.clone()),
-            (
-                LABEL_PROJECT.to_owned(),
-                project.to_string_lossy().into_owned(),
-            ),
-            (LABEL_PROJECT_HASH.to_owned(), box_spec.project_hash.clone()),
-            (LABEL_PROVIDERS.to_owned(), box_spec.routed.join(",")),
-            (
-                LABEL_WORKSPACE_MODE.to_owned(),
-                workspace_mode.as_str().to_owned(),
-            ),
-        ];
-        volume_labels.sort_by(|left, right| left.0.cmp(&right.0));
-        runtime
-            .create_volume(&VolumeSpec {
-                name: volume.0.clone(),
-                labels: volume_labels,
-            })
+    let provisioned = async {
+        let volume = if workspace_mode == capscode_core::WorkspaceMode::Copy {
+            let volume = VolumeId(format!("capscode-{}-workspace", session));
+            let mut volume_labels = vec![
+                (LABEL_OWNER.to_owned(), LABEL_OWNER_VALUE.to_owned()),
+                (LABEL_SESSION.to_owned(), session.to_string()),
+                (LABEL_ROLE.to_owned(), ROLE_CAPSULE.to_owned()),
+                (LABEL_CREATED.to_owned(), index::now()),
+                (LABEL_BOX.to_owned(), box_name.clone()),
+                (LABEL_BOX_ID.to_owned(), id.clone()),
+                (
+                    LABEL_PROJECT.to_owned(),
+                    project.to_string_lossy().into_owned(),
+                ),
+                (LABEL_PROJECT_HASH.to_owned(), box_spec.project_hash.clone()),
+                (LABEL_PROVIDERS.to_owned(), box_spec.routed.join(",")),
+                (
+                    LABEL_WORKSPACE_MODE.to_owned(),
+                    workspace_mode.as_str().to_owned(),
+                ),
+            ];
+            volume_labels.sort_by(|left, right| left.0.cmp(&right.0));
+            runtime
+                .create_volume(&VolumeSpec {
+                    name: volume.0.clone(),
+                    labels: volume_labels,
+                })
+                .await
+                .context("creating box workspace volume")?;
+            let state_dir = crate::session::state::session_state_dir(&session);
+            prepare_session_state_dir(&state_dir)?;
+            let mut progress = |event: capscode_core::IngressProgress| {
+                note(format!("Preparing workspace: {}", event.phase));
+            };
+            git.ingress(
+                &IngressPlan {
+                    host_repo: project.clone(),
+                    session: session.clone(),
+                    state_dir,
+                    seeder_image: options.seeder_image.clone(),
+                    history: options.config.git.history,
+                    include: options.config.git.include.clone(),
+                    verbose: options.verbose,
+                },
+                runtime.as_ref(),
+                &mut progress,
+            )
             .await
-            .context("creating box workspace volume")?;
-        let state_dir = crate::session::state::session_state_dir(&session);
-        prepare_session_state_dir(&state_dir)?;
-        let mut progress = |event: capscode_core::IngressProgress| {
-            note(format!("Preparing workspace: {}", event.phase));
+            .context("copying project into box workspace")?;
+            Some(volume)
+        } else {
+            None
         };
-        git.ingress(
-            &IngressPlan {
-                host_repo: project.clone(),
-                session: session.clone(),
-                state_dir,
-                seeder_image: options.seeder_image.clone(),
-                history: options.config.git.history,
-                include: options.config.git.include.clone(),
-                verbose: options.verbose,
-            },
-            runtime.as_ref(),
-            &mut progress,
-        )
-        .await
-        .context("copying project into box workspace")?;
-        Some(volume)
-    } else {
-        None
-    };
-    if cache_enabled {
-        create_box_cache_volume(runtime.as_ref(), &options).await?;
+        if cache_enabled {
+            create_box_cache_volume(runtime.as_ref(), &options).await?;
+        }
+        let network: Arc<dyn NetworkStack> =
+            Arc::new(capscode_net::NetStack::new(options.config.network.clone()));
+        let mut driver =
+            crate::session::state::SessionDriver::new(options, Arc::clone(&runtime), git, network)?;
+        if let Some(volume) = volume {
+            driver
+                .provision_existing(volume)
+                .await
+                .context("provisioning box containers")?;
+        } else {
+            provision_until_running(&mut driver, runtime.as_ref(), &session).await?;
+        }
+        Ok::<_, anyhow::Error>(())
     }
-    let network: Arc<dyn NetworkStack> =
-        Arc::new(capscode_net::NetStack::new(options.config.network.clone()));
-    let mut driver =
-        crate::session::state::SessionDriver::new(options, Arc::clone(&runtime), git, network)?;
-    if let Some(volume) = volume {
-        driver
-            .provision_existing(volume)
-            .await
-            .context("provisioning box containers")?;
-    } else {
-        provision_until_running(&mut driver, runtime.as_ref(), &session).await?;
+    .await;
+    if let Err(error) = provisioned {
+        discard_failed_create(
+            runtime.as_ref(),
+            &session,
+            &crate::session::state::session_state_dir(&session),
+        )
+        .await;
+        return Err(error.context(format!(
+            "box {box_name} was not created; removed what it had set up"
+        )));
     }
     snapshot_if_present(runtime.as_ref(), &capsule_image, &lock, &current_toolchain).await?;
     index::upsert(entry)?;
@@ -1155,6 +1170,35 @@ async fn provision_until_running(
     Ok(())
 }
 
+/// Remove what a failed `create` set up for its new session: containers, volumes, networks,
+/// and the session state dir. The box never ran a tool, so its workspace volume holds only a
+/// copy of the project, which is still on the host. Left behind, these read as a box with no
+/// capsule that `rm` cannot check for unsynced work.
+async fn discard_failed_create(
+    runtime: &dyn RuntimeAdapter,
+    session: &SessionId,
+    state_dir: &Path,
+) {
+    cleanup_session_containers(runtime, session).await;
+    if let Ok(objects) = runtime.list_owned().await {
+        for object in objects
+            .iter()
+            .filter(|object| object.session.as_ref() == Some(session))
+        {
+            match object.kind {
+                OwnedObjectKind::Volume => {
+                    let _ = runtime.remove_volume(&VolumeId(object.id.clone())).await;
+                }
+                OwnedObjectKind::Network => {
+                    let _ = runtime.remove_network(&object.id).await;
+                }
+                _ => {}
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(state_dir);
+}
+
 async fn cleanup_session_containers(runtime: &dyn RuntimeAdapter, session: &SessionId) {
     let Ok(objects) = runtime.list_owned().await else {
         return;
@@ -1783,6 +1827,31 @@ mod tests {
             image: None,
             labels,
         }
+    }
+
+    #[tokio::test]
+    async fn a_failed_create_removes_only_what_it_set_up() {
+        let runtime = MockRuntime::default();
+        let mut other_volume = object(OwnedObjectKind::Volume, "s2", &[], None);
+        other_volume.id = "other-workspace".into();
+        *runtime.1.lock().unwrap() = vec![
+            object(OwnedObjectKind::Container, "s1", &[], Some("running")),
+            object(OwnedObjectKind::Volume, "s1", &[], None),
+            other_volume,
+        ];
+        let state = tempfile::tempdir().unwrap();
+        let state_dir = state.path().join("s1");
+        std::fs::create_dir_all(state_dir.join("shadow.git")).unwrap();
+        std::fs::write(state_dir.join("receipt.json"), "{}").unwrap();
+
+        discard_failed_create(&runtime, &SessionId::from("s1".to_owned()), &state_dir).await;
+
+        let calls = runtime.0.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            ["stop:Container", "remove:Container", "remove-volume:Volume"]
+        );
+        assert!(!state_dir.exists());
     }
 
     #[tokio::test]
