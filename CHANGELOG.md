@@ -2,6 +2,15 @@
 
 This file follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [Unreleased]
+
+### Fixed
+
+- After a full non-Git `sync`, `rm` could keep saying the box had work that was not synced.
+  Edits newer than the box's last automatic checkpoint left its private checkpoint repository
+  dirty, and a stopped box never took another checkpoint. A full sync now commits the tree it
+  brought back, so the box reads as synced until it changes again.
+
 ## [0.1.1] - 2026-10-20
 
 ### Fixed
@@ -42,5 +51,6 @@ First public release.
   (`capscode provider`, `capscode config`), shell completions, and diagnostics
   (`capscode doctor`, `capscode doctor --quick`).
 
+[Unreleased]: https://github.com/sayre4ux/capscode/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/sayre4ux/capscode/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sayre4ux/capscode/releases/tag/v0.1.0

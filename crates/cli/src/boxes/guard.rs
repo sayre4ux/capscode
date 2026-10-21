@@ -138,8 +138,10 @@ async fn stopped_workspace_identity(
     target: &BoxRef,
     capsule: &OwnedObject,
 ) -> Result<SyncIdentity> {
-    // DECISION: create the autosync baseline during this writable stopped-volume read so an
-    // unborn shadow repository cannot be recorded as dirty forever after the box is stopped.
+    // Callers read the identity only after a sync brought back everything the stopped workspace
+    // holds, so committing that tree here records it as synced. Without the commit, edits newer
+    // than the keeper's last autosync tick would leave the tree dirty, and a stopped box (no
+    // keeper running) would then read as unsynced forever.
     let output = inspect_work(runtime, target, capsule, true)
         .await
         .context("inspecting the stopped box workspace")?;
@@ -208,12 +210,12 @@ async fn inspect_work(
     runtime: &dyn RuntimeAdapter,
     target: &BoxRef,
     capsule: &OwnedObject,
-    establish_shadow_head: bool,
+    commit_synced_tree: bool,
 ) -> Result<Vec<u8>> {
-    let shadow_baseline = if establish_shadow_head {
-        "if ! git --git-dir=/workspace/.capscode-autosync.git rev-parse HEAD >/dev/null 2>&1; then git --git-dir=/workspace/.capscode-autosync.git --work-tree=/workspace add -A && git --git-dir=/workspace/.capscode-autosync.git --work-tree=/workspace -c user.name=capsule -c user.email=capsule@localhost -c commit.gpgsign=false -c core.hooksPath=/dev/null commit --allow-empty -m 'capsule: synced baseline' >/dev/null || exit 1; fi; "
+    let shadow_baseline = if commit_synced_tree {
+        shadow_commit_script(WORKSPACE)
     } else {
-        ""
+        String::new()
     };
     let command = format!(
         "git -C /workspace rev-parse --is-inside-work-tree >/dev/null 2>&1 && {{ printf 'git\\n'; git -C /workspace rev-parse HEAD && git -C /workspace status --porcelain --untracked-files=all && printf '%s\\n' '{IGNORED_MARKER}' && git -C /workspace ls-files --others --ignored --exclude-standard --directory; }} || {{ {shadow_baseline}printf 'shadow\\n'; if git --git-dir=/workspace/.capscode-autosync.git rev-parse HEAD 2>/dev/null; then :; else printf 'unborn\\n'; fi; git --git-dir=/workspace/.capscode-autosync.git --work-tree=/workspace status --porcelain --untracked-files=all && printf '%s\\n' '{IGNORED_MARKER}' && git --git-dir=/workspace/.capscode-autosync.git --work-tree=/workspace ls-files --others --ignored --exclude-standard --directory; }}"
@@ -238,7 +240,21 @@ async fn inspect_work(
         }
         return Ok(output.stdout);
     }
-    stopped_helper(runtime, target, spec, !establish_shadow_head).await
+    stopped_helper(runtime, target, spec, !commit_synced_tree).await
+}
+
+/// Shell that commits the whole workspace into the private autosync repository: a baseline
+/// commit when the repository is unborn, otherwise a commit only when the tree changed.
+/// The repository hides itself through its `info/exclude`, written by the keeper; an exclude
+/// pathspec for an ignored path would make `git add` fail.
+fn shadow_commit_script(workspace: &str) -> String {
+    let git = format!("git --git-dir={workspace}/.capscode-autosync.git --work-tree={workspace}");
+    let commit = format!(
+        "{git} -c user.name=capsule -c user.email=capsule@localhost -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q"
+    );
+    format!(
+        "{git} add -A || exit 1; if ! {git} rev-parse -q --verify HEAD >/dev/null; then {commit} --allow-empty -m 'capsule: synced baseline' || exit 1; elif ! {git} diff --cached --quiet; then {commit} -m 'capsule: synced' || exit 1; fi; "
+    )
 }
 
 async fn stopped_helper(
@@ -556,7 +572,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stopped_shadow_identity_establishes_a_baseline_for_an_unborn_repo() {
+    async fn stopped_shadow_identity_commits_the_synced_tree() {
         let runtime = MockRuntime::new(b"shadow\ncommit-baseline\n--ignored--\n");
         // Exercise the generated command in the mock exec path without loading image config from
         // the user's home; workspace_identity calls this helper only after confirming stopped state.
@@ -577,10 +593,92 @@ mod tests {
             false
         ));
         let command = runtime.exec_specs.lock().unwrap()[0].cmd[2].clone();
+        assert!(command.contains(&shadow_commit_script(WORKSPACE)));
+        let commit_at = command.find("commit -q").unwrap();
         assert!(
-            command.contains("if ! git --git-dir=/workspace/.capscode-autosync.git rev-parse HEAD")
+            commit_at < command.find("printf 'shadow\\n'").unwrap(),
+            "the identity is read after the commit"
         );
-        assert!(command.contains("commit --allow-empty -m 'capsule: synced baseline'"));
+    }
+
+    fn git(workspace: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .arg(format!(
+                "--git-dir={}/.capscode-autosync.git",
+                workspace.display()
+            ))
+            .arg(format!("--work-tree={}", workspace.display()))
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    fn run_commit_script(workspace: &Path) {
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(shadow_commit_script(&workspace.display().to_string()))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    #[test]
+    fn the_commit_script_leaves_a_dirty_autosync_tree_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path();
+        git(workspace, &["init", "-q"]);
+        // The keeper's setup (images/keeper.sh) hides the repository from its own worktree.
+        fs::write(
+            workspace.join(".capscode-autosync.git/info/exclude"),
+            "/.capscode-autosync.git/\n",
+        )
+        .unwrap();
+        fs::write(workspace.join("a.txt"), "one").unwrap();
+
+        run_commit_script(workspace);
+        let baseline = git(workspace, &["rev-parse", "HEAD"]);
+        assert_eq!(
+            git(
+                workspace,
+                &["status", "--porcelain", "--untracked-files=all"]
+            ),
+            ""
+        );
+
+        // Edits newer than the keeper's last tick: a change, an addition, a deletion.
+        fs::write(workspace.join("a.txt"), "two").unwrap();
+        fs::write(workspace.join("b.txt"), "new").unwrap();
+        run_commit_script(workspace);
+        let synced = git(workspace, &["rev-parse", "HEAD"]);
+        assert_ne!(synced, baseline);
+        assert_eq!(
+            git(
+                workspace,
+                &["status", "--porcelain", "--untracked-files=all"]
+            ),
+            ""
+        );
+
+        fs::remove_file(workspace.join("b.txt")).unwrap();
+        run_commit_script(workspace);
+        assert_eq!(
+            git(workspace, &["ls-tree", "-r", "--name-only", "HEAD"]),
+            "a.txt\n"
+        );
+
+        let clean = git(workspace, &["rev-parse", "HEAD"]);
+        run_commit_script(workspace);
+        assert_eq!(
+            git(workspace, &["rev-parse", "HEAD"]),
+            clean,
+            "a clean tree gets no new commit"
+        );
     }
 
     #[tokio::test]
@@ -602,7 +700,7 @@ mod tests {
         ));
         let command = runtime.exec_specs.lock().unwrap()[0].cmd[2].clone();
         assert!(command.contains("--work-tree=/workspace add -A"));
-        assert!(command.contains("commit --allow-empty"));
+        assert!(command.contains("--allow-empty"));
         assert!(command.contains("ls-files --others --ignored --exclude-standard --directory"));
     }
 
