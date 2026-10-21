@@ -10,14 +10,14 @@
     "yanked_versions": []
   },
   "toolchain": {
-    "sequence": 3,
-    "tag": "toolchain-3",
-    "digest": "bf2cff36722f",
-    "min_cli_version": "0.1.0",
-    "lock_url": "https://github.com/sayre4ux/capscode/releases/download/toolchain-3/toolchain.lock.toml",
-    "lock_sha256": "06e27a30bf0b41ad9a058286a61789599465900f9b2efd206dd2b70b8641d628",
-    "attestation_url": "https://github.com/sayre4ux/capscode/releases/download/toolchain-3/toolchain.lock.toml.sigstore",
-    "attestation_sha256": "a3c1e0b56aa1b592a43f686a6f1e525546fe75a226a24e94091f1694a257aa9d",
+    "sequence": 4,
+    "tag": "toolchain-4",
+    "digest": "338e3f676372",
+    "min_cli_version": "0.1.2",
+    "lock_url": "https://github.com/sayre4ux/capscode/releases/download/toolchain-4/toolchain.lock.toml",
+    "lock_sha256": "cc123edc04203d759567e1de2389ea4193667af3489ab88c5774a119982f8426",
+    "attestation_url": "https://github.com/sayre4ux/capscode/releases/download/toolchain-4/toolchain.lock.toml.sigstore",
+    "attestation_sha256": "4d65c21cb0192921538a92d04a9a079d0c4457b3a1088693d8464732f056a9e2",
     "yanked": []
   }
 }
