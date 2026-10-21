@@ -148,9 +148,6 @@ what is deliberately not planned.
   it would write to your real repository.
 - **Copy-back never applies deletions.** Deleted files, symlinks, and type changes are reported,
   not applied. Conflicted files are left in the session's `staging/` directory.
-- **Through v0.1.1, repeated `sync` reports more conflicts over time,** because each file is
-  compared with the session's starting snapshot. Nothing is lost. `main` fixes this for the next
-  release: a file is compared with what your folder and the box last agreed on.
 
 `previous-handoff.<n>` directories are kept until `capscode rm <box>`, since each may hold the
 only copy of a conflicted or overwritten file.

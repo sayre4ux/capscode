@@ -15,10 +15,6 @@ change as people use the tool. To suggest or discuss an item, open an issue.
 
 - **Wider testing.** Boxes and tunnel mode on Linux, Docker Desktop, and x86-64 hosts are not
   yet tested (see [Limitations](https://github.com/sayre4ux/capscode/blob/main/README.md#limitations)).
-- **Sync conflicts in long-lived boxes.** Through v0.1.1, repeated `sync` compares each file with
-  the session's starting snapshot, so a box that syncs often reports more and more of its tree as
-  conflicting. Fixed on `main` for the next release: each file is compared with what your folder
-  and the box last agreed on.
 - **Attestation checks on by default.** Checking a release's GitHub attestation is opt-in today
   (`update.verify_with_gh`, `install.sh --verify-attestation`) because it needs the GitHub CLI.
   The goal is to verify attestations in CapsCode itself, so every update gets the check without

@@ -2,7 +2,7 @@
 
 This file follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-## [Unreleased]
+## [0.1.2] - 2026-10-21
 
 ### Fixed
 
@@ -65,6 +65,6 @@ First public release.
   (`capscode provider`, `capscode config`), shell completions, and diagnostics
   (`capscode doctor`, `capscode doctor --quick`).
 
-[Unreleased]: https://github.com/sayre4ux/capscode/compare/v0.1.1...HEAD
+[0.1.2]: https://github.com/sayre4ux/capscode/releases/tag/v0.1.2
 [0.1.1]: https://github.com/sayre4ux/capscode/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sayre4ux/capscode/releases/tag/v0.1.0
