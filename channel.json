@@ -2,11 +2,11 @@
   "schema": 1,
   "generated_at": "2026-10-18T20:18:47Z",
   "cli": {
-    "version": "0.1.0",
-    "tag": "v0.1.0",
-    "commit": "f08c6cb9cb04079a21698dcae305b3d01e4736ab",
+    "version": "0.1.1",
+    "tag": "v0.1.1",
+    "commit": "b7ba98fa9ee8eec0a6289988fb8ca3e8c967805c",
     "min_toolchain_sequence": 1,
-    "notes_url": "https://github.com/sayre4ux/capscode/releases/tag/v0.1.0",
+    "notes_url": "https://github.com/sayre4ux/capscode/releases/tag/v0.1.1",
     "yanked_versions": []
   },
   "toolchain": {
