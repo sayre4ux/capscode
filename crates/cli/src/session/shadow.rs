@@ -390,6 +390,18 @@ mod tests {
         }
     }
 
+    /// Retry briefly after a drop: a child another test forks in parallel holds a copy of the
+    /// lock's descriptor until it execs, which keeps the lock taken for a moment.
+    fn eventually<T>(mut attempt: impl FnMut() -> anyhow::Result<T>) -> T {
+        for _ in 0..50 {
+            if let Ok(value) = attempt() {
+                return value;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        attempt().unwrap()
+    }
+
     #[test]
     fn a_second_workspace_lock_on_the_same_box_is_refused_until_the_first_drops() {
         let dir = tempfile::tempdir().unwrap();
@@ -400,7 +412,7 @@ mod tests {
             "{error}"
         );
         drop(first);
-        super::lock_workspace(dir.path()).unwrap();
+        eventually(|| super::lock_workspace(dir.path()));
 
         let missing = dir.path().join("gone");
         super::lock_workspace(&missing).unwrap();
@@ -434,7 +446,7 @@ mod tests {
         assert!(format!("{error:#}").contains("session b"), "{error:#}");
         drop(busy);
         assert_eq!(
-            super::lock_all_workspaces(sessions.path()).unwrap().len(),
+            eventually(|| super::lock_all_workspaces(sessions.path())).len(),
             2
         );
         assert!(super::lock_all_workspaces(&sessions.path().join("none"))
