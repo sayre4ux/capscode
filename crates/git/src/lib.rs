@@ -1,7 +1,7 @@
 //! Sanitized git ingress/egress engine implementing `capscode_core::GitEngine`.
 //! Git workspace ingress and egress operations.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(unix)]
 use std::ffi::CString;
 use std::ffi::OsString;
@@ -34,7 +34,6 @@ const SHADOW_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const SHADOW_FREE_SPACE_MARGIN: u64 = 64 * 1024 * 1024;
 const RECEIPT_FILE: &str = "receipt.json";
 const MANIFEST_FILE: &str = "manifest.json";
-const DIFF_OUTPUT_LIMIT: usize = 256 * 1024;
 const PRIVATE_SHADOW_ROOTS: &[&str] = &[".capscode-autosync.git"];
 const RUNNER_DIRECTORIES: &[&str] = &[".husky", ".githooks", ".lefthook", ".git-hooks"];
 const RUNNER_CONFIG_FILES: &[&str] = &[
@@ -111,9 +110,8 @@ pub struct ShadowHandoff {
     pub changes: Vec<ShadowFileChange>,
     pub conflicts: Vec<ShadowIssue>,
     pub unsupported: Vec<ShadowIssue>,
-    pub diff: String,
-    pub diff_truncated: bool,
     git_dir: PathBuf,
+    baseline: Oid,
     candidates: Vec<ShadowApplyCandidate>,
 }
 
@@ -153,6 +151,9 @@ pub struct ShadowApplyReport {
     /// Paths whose apply-time revalidation failed. Each one stays in the staging
     /// directory; a single failure does not prevent processing the rest of the round.
     pub failed: Vec<ShadowIssue>,
+    /// Applied files whose existing host mode was kept although the capsule's executable bit
+    /// differs. Their content came back; the mode change did not.
+    pub kept_host_mode: Vec<PathBuf>,
 }
 
 /// What class of thing a changed path is, from the HOST's point of view.
@@ -533,6 +534,8 @@ impl PhaseLog {
         self.phases.push(PhaseTiming::new(phase, elapsed));
     }
 }
+
+mod agreed;
 
 mod walkdir {
     // Minimal walkdir replacement to avoid new dep in lib.
@@ -2480,7 +2483,7 @@ fn validate_path_set(root: &Path, paths: &[PathBuf]) -> Result<(), GitError> {
     Ok(())
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GitFileState {
     mode: u32,
     blob: Oid,
@@ -2897,7 +2900,7 @@ fn shadow_export_is_unchanged(changes: &[RawShadowChange], unsupported: &[Shadow
     changes.is_empty() && unsupported.is_empty()
 }
 
-fn empty_shadow_handoff(state_dir: &Path, git_dir: &Path) -> ShadowHandoff {
+fn empty_shadow_handoff(state_dir: &Path, git_dir: &Path, baseline: Oid) -> ShadowHandoff {
     ShadowHandoff {
         state_dir: state_dir.to_path_buf(),
         staging_dir: state_dir.join("staging"),
@@ -2906,11 +2909,93 @@ fn empty_shadow_handoff(state_dir: &Path, git_dir: &Path) -> ShadowHandoff {
         changes: Vec::new(),
         conflicts: Vec::new(),
         unsupported: Vec::new(),
-        diff: String::new(),
-        diff_truncated: false,
         git_dir: git_dir.to_path_buf(),
+        baseline,
         candidates: Vec::new(),
     }
+}
+
+/// One path whose capsule state differs from its base.
+struct CompositeChange {
+    path: Vec<u8>,
+    status: u8,
+    /// What the host side is expected to hold, for conflict classification. It differs from
+    /// the capsule-side base only in the executable bit of a file a sync wrote.
+    host_base: Option<GitFileState>,
+    /// An interrupted write left this path with no known base, so any difference conflicts.
+    disputed: bool,
+}
+
+const DISPUTED_REASON: &str =
+    "an interrupted sync left this file unsettled; compare the staged copy with yours by hand";
+const DISPUTED_DELETION_REASON: &str =
+    "an interrupted sync left this file unsettled and the box has since deleted it; check your copy by hand";
+
+/// The change set against the composite base: a path's last agreement where the record has
+/// one, the ingress commit everywhere else. Deriving it from the ingress commit alone would
+/// drop a path whose capsule content went back to ingress after a sync wrote a newer version
+/// to the host, and would label a path by its distance from ingress, not from what the host
+/// last agreed to.
+fn composite_changes(
+    raw: Vec<RawShadowChange>,
+    agreed: &BTreeMap<Vec<u8>, agreed::Agreed>,
+    ingress: &BTreeMap<Vec<u8>, GitFileState>,
+    capsule: &BTreeMap<Vec<u8>, GitFileState>,
+) -> Vec<CompositeChange> {
+    let mode = |executable: bool| if executable { 0o100755 } else { 0o100644 };
+    let mut changes = BTreeMap::new();
+    for change in raw {
+        if !agreed.contains_key(&change.path) {
+            let base = ingress.get(&change.path).copied();
+            changes.insert(change.path, (change.status, base, false));
+        }
+    }
+    for (path, agreement) in agreed {
+        if *agreement == agreed::Agreed::Disputed {
+            let status = if capsule.contains_key(path) {
+                b'M'
+            } else {
+                b'D'
+            };
+            changes.insert(path.clone(), (status, None, true));
+            continue;
+        }
+        let (base, host_base) = match agreement {
+            agreed::Agreed::File {
+                blob,
+                host_executable,
+                capsule_executable,
+            } => (
+                Some(GitFileState {
+                    mode: mode(*capsule_executable),
+                    blob: *blob,
+                }),
+                Some(GitFileState {
+                    mode: mode(*host_executable),
+                    blob: *blob,
+                }),
+            ),
+            agreed::Agreed::Absent | agreed::Agreed::Disputed => (None, None),
+        };
+        let status = match (base, capsule.get(path)) {
+            (None, None) => continue,
+            (Some(_), None) => b'D',
+            (None, Some(_)) => b'A',
+            (Some(base), Some(current)) if base == *current => continue,
+            (Some(base), Some(current)) if base.mode & 0o170000 != current.mode & 0o170000 => b'T',
+            (Some(_), Some(_)) => b'M',
+        };
+        changes.insert(path.clone(), (status, host_base, false));
+    }
+    changes
+        .into_iter()
+        .map(|(path, (status, host_base, disputed))| CompositeChange {
+            path,
+            status,
+            host_base,
+            disputed,
+        })
+        .collect()
 }
 
 fn manifest_issue(issue: &ShadowIssue) -> serde_json::Value {
@@ -2920,12 +3005,18 @@ fn manifest_issue(issue: &ShadowIssue) -> serde_json::Value {
     })
 }
 
-fn write_shadow_manifest(
-    state_dir: &Path,
-    baseline: Oid,
+/// The per-path records one round writes to its manifest.
+struct ManifestEntries {
     additions: Vec<serde_json::Value>,
     modifications: Vec<serde_json::Value>,
     deletions: Vec<serde_json::Value>,
+    already_agreed: Vec<serde_json::Value>,
+}
+
+fn write_shadow_manifest(
+    state_dir: &Path,
+    baseline: Oid,
+    entries: ManifestEntries,
     conflicts: &[ShadowIssue],
     unsupported: &[ShadowIssue],
 ) -> Result<PathBuf, GitError> {
@@ -2938,9 +3029,10 @@ fn write_shadow_manifest(
     }
     let manifest = serde_json::json!({
         "baseline": baseline.to_string(),
-        "additions": additions,
-        "modifications": modifications,
-        "deletions": deletions,
+        "additions": entries.additions,
+        "modifications": entries.modifications,
+        "deletions": entries.deletions,
+        "already_agreed": entries.already_agreed,
         "conflicts": conflicts.iter().map(manifest_issue).collect::<Vec<_>>(),
         "unsupported": unsupported.iter().map(manifest_issue).collect::<Vec<_>>(),
     });
@@ -3002,8 +3094,11 @@ fn prepare_shadow_handoff(
     )?;
     let raw_changes = parse_name_status_z(&output.stdout)?;
     let mut unsupported = collect_shadow_unsupported(export)?;
-    if shadow_export_is_unchanged(&raw_changes, &unsupported) {
-        return Ok(empty_shadow_handoff(state_dir, git_dir));
+    let journal = agreed::open_for_round(state_dir, baseline, |path, intent| {
+        intended_write_landed(host_root, path, intent, git_dir)
+    })?;
+    if journal.entries.is_empty() && shadow_export_is_unchanged(&raw_changes, &unsupported) {
+        return Ok(empty_shadow_handoff(state_dir, git_dir, baseline));
     }
 
     let mut ls_tree = shadow_git_command(git_dir, export);
@@ -3031,6 +3126,15 @@ fn prepare_shadow_handoff(
         )?
         .stdout,
     )?;
+    let composite = composite_changes(
+        raw_changes,
+        &journal.entries,
+        &baseline_records,
+        &index_records,
+    );
+    if composite.is_empty() && unsupported.is_empty() {
+        return Ok(empty_shadow_handoff(state_dir, git_dir, baseline));
+    }
 
     let staging_dir = state_dir.join("staging");
     if staging_dir.exists() {
@@ -3054,8 +3158,16 @@ fn prepare_shadow_handoff(
     let mut additions = Vec::new();
     let mut modifications = Vec::new();
     let mut deletions = Vec::new();
+    let mut agreements = Vec::new();
+    let mut host_listings = HashMap::new();
+    let case_collisions = case_fold_collision_paths(
+        &index_records
+            .keys()
+            .map(|path| path_from_git_bytes(path.clone()))
+            .collect::<Vec<_>>(),
+    );
 
-    for raw in raw_changes {
+    for raw in composite {
         let raw_path = raw.path.clone();
         let path = path_from_git_bytes(raw.path);
         if let Err(reason) = validate_relative_path(&path) {
@@ -3067,7 +3179,7 @@ fn prepare_shadow_handoff(
         if unsupported_paths.contains(&path) {
             continue;
         }
-        let baseline_state = baseline_records.get(&raw_path);
+        let baseline_state = raw.host_base.as_ref();
         let capsule_state = index_records.get(&raw_path);
         let kind = match raw.status {
             b'A' => ShadowChangeKind::Added,
@@ -3084,6 +3196,28 @@ fn prepare_shadow_handoff(
             _ => unreachable!("parse_name_status_z validates statuses"),
         };
 
+        if kind == ShadowChangeKind::Deleted && raw.disputed {
+            if host_path_is_missing(host_root, &path) {
+                agreements.push((path, agreed::Agreed::Absent));
+                continue;
+            }
+            changes.push(ShadowFileChange {
+                kind,
+                path: path.clone(),
+            });
+            conflicts.push(ShadowIssue {
+                path: path.clone(),
+                reason: DISPUTED_DELETION_REASON.to_string(),
+            });
+            deletions.push(serde_json::json!({
+                "path": escape_shadow_path(&path),
+                "baseline_mode": serde_json::Value::Null,
+                "baseline_hash": serde_json::Value::Null,
+                "capsule_mode": serde_json::Value::Null,
+                "capsule_hash": serde_json::Value::Null,
+            }));
+            continue;
+        }
         if kind == ShadowChangeKind::Deleted {
             let Some(baseline_state) = baseline_state else {
                 unsupported.push(ShadowIssue {
@@ -3097,6 +3231,10 @@ fn prepare_shadow_handoff(
                     path,
                     reason: "deleted non-regular entry is not applied".to_string(),
                 });
+                continue;
+            }
+            if host_path_is_missing(host_root, &path) {
+                agreements.push((path, agreed::Agreed::Absent));
                 continue;
             }
             changes.push(ShadowFileChange {
@@ -3132,6 +3270,29 @@ fn prepare_shadow_handoff(
             continue;
         }
 
+        let host_state = inspect_host_file(host_root, &path, git_dir)?;
+        let capsule_executable = git_mode_is_executable(capsule_state.mode);
+        if let HostFileState::Regular { blob, mode } = &host_state {
+            // The host already holds exactly what the capsule has: nothing to write and
+            // nothing to lose. A path whose host name differs only in case goes through the
+            // ordinary checks instead.
+            if *blob == capsule_state.blob
+                && (mode & 0o111 != 0) == capsule_executable
+                && !case_collisions.contains(&path)
+                && host_name_is_exact(host_root, &path, &mut host_listings)
+            {
+                agreements.push((
+                    path,
+                    agreed::Agreed::File {
+                        blob: *blob,
+                        host_executable: capsule_executable,
+                        capsule_executable,
+                    },
+                ));
+                continue;
+            }
+        }
+
         let source_mode = stage_regular_file(export, &staging_dir, &path)?;
         let (staged_file, _) = open_regular_from_root(&staging_dir, &path)?;
         let staged_blob = hash_open_file(git_dir, &staging_dir, staged_file)?;
@@ -3141,10 +3302,13 @@ fn prepare_shadow_handoff(
                 escape_shadow_path(&path)
             )));
         }
-        let host_state = inspect_host_file(host_root, &path, git_dir)?;
         let baseline_blob = baseline_state.map(|state| state.blob);
         let baseline_executable = baseline_state.map(|state| git_mode_is_executable(state.mode));
-        let conflict = classify_conflict(kind, baseline_blob, baseline_executable, &host_state);
+        let conflict = if raw.disputed {
+            Some(DISPUTED_REASON.to_string())
+        } else {
+            classify_conflict(kind, baseline_blob, baseline_executable, &host_state)
+        };
         if let Some(reason) = &conflict {
             conflicts.push(ShadowIssue {
                 path: path.clone(),
@@ -3154,7 +3318,7 @@ fn prepare_shadow_handoff(
             candidates.push(ShadowApplyCandidate {
                 path: path.clone(),
                 kind,
-                capsule_executable: git_mode_is_executable(capsule_state.mode),
+                capsule_executable,
                 capsule_blob: capsule_state.blob,
                 baseline_blob,
                 baseline_executable,
@@ -3192,36 +3356,34 @@ fn prepare_shadow_handoff(
         }
     }
 
+    // An observation, not a write: recording it before the user answers is safe, because
+    // both sides held this state at capture time whatever happens to the round.
+    agreed::record(state_dir, baseline, &agreements)?;
     unsupported.sort_by(|left, right| left.path.cmp(&right.path));
+    if changes.is_empty() && unsupported.is_empty() {
+        std::fs::remove_dir(&staging_dir).map_err(|error| {
+            shadow_egress_error(format!(
+                "removing empty file sync staging directory {}: {error}",
+                staging_dir.display()
+            ))
+        })?;
+        return Ok(empty_shadow_handoff(state_dir, git_dir, baseline));
+    }
     let manifest_path = write_shadow_manifest(
         state_dir,
         baseline,
-        additions,
-        modifications,
-        deletions,
+        ManifestEntries {
+            additions,
+            modifications,
+            deletions,
+            already_agreed: agreements
+                .iter()
+                .map(|(path, _)| serde_json::Value::String(escape_shadow_path(path)))
+                .collect(),
+        },
         &conflicts,
         &unsupported,
     )?;
-
-    let mut diff = shadow_git_command(git_dir, export);
-    diff.env("GIT_INDEX_FILE", &index_path)
-        .args([
-            "diff",
-            "--cached",
-            "--binary",
-            "--no-ext-diff",
-            "--no-textconv",
-        ])
-        .arg(baseline.to_string())
-        .arg("--");
-    let diff_output = require_shadow_egress_success(
-        "diff",
-        diff.output().map_err(|error| {
-            shadow_egress_error(format!("starting file sync git diff: {error}"))
-        })?,
-    )?;
-    let diff_truncated = diff_output.stdout.len() > DIFF_OUTPUT_LIMIT;
-    let shown_diff = &diff_output.stdout[..diff_output.stdout.len().min(DIFF_OUTPUT_LIMIT)];
 
     Ok(ShadowHandoff {
         state_dir: state_dir.to_path_buf(),
@@ -3231,11 +3393,74 @@ fn prepare_shadow_handoff(
         changes,
         conflicts,
         unsupported,
-        diff: String::from_utf8_lossy(shown_diff).into_owned(),
-        diff_truncated,
         git_dir: git_dir.to_path_buf(),
+        baseline,
         candidates,
     })
+}
+
+/// Whether a write left open by a crash reached the host: only when the host holds exactly
+/// the intended file. The prior file may mean the write never happened, or that it did and
+/// the user changed the file back; anything else may be a host edit. Neither can be told
+/// apart from here, so the caller disputes the path rather than guess.
+fn intended_write_landed(
+    host_root: &Path,
+    relative: &Path,
+    intent: &agreed::Intent,
+    git_dir: &Path,
+) -> Result<bool, GitError> {
+    let host = inspect_host_file(host_root, relative, git_dir)?;
+    Ok(match (intent.agreed, &host) {
+        (
+            agreed::Agreed::File {
+                blob,
+                host_executable,
+                ..
+            },
+            HostFileState::Regular {
+                blob: host_blob,
+                mode,
+            },
+        ) => *host_blob == blob && (mode & 0o111 != 0) == host_executable,
+        _ => false,
+    })
+}
+
+/// Whether nothing exists at a host path, checked without opening it.
+fn host_path_is_missing(host_root: &Path, relative: &Path) -> bool {
+    matches!(
+        std::fs::symlink_metadata(host_root.join(relative)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
+/// Whether every component of the path is listed under its exact name on the host, not one
+/// that differs only in case, which a case-insensitive filesystem would resolve the same way.
+/// `listings` caches each directory's names for the round.
+fn host_name_is_exact(
+    host_root: &Path,
+    relative: &Path,
+    listings: &mut HashMap<PathBuf, HashSet<OsString>>,
+) -> bool {
+    let mut directory = host_root.to_path_buf();
+    for component in relative.components() {
+        let name = component.as_os_str();
+        let names = listings.entry(directory.clone()).or_insert_with(|| {
+            std::fs::read_dir(&directory)
+                .map(|entries| {
+                    entries
+                        .filter_map(Result::ok)
+                        .map(|entry| entry.file_name())
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        if !names.contains(name) {
+            return false;
+        }
+        directory.push(name);
+    }
+    true
 }
 
 pub async fn shadow_egress(
@@ -3299,11 +3524,13 @@ fn back_up_host_file(
     Ok(())
 }
 
+/// Write one candidate to the host. Returns whether the file kept a host mode that differs
+/// from the capsule's executable bit.
 fn apply_shadow_candidate(
     handoff: &ShadowHandoff,
     host_root: &Path,
     candidate: &ShadowApplyCandidate,
-) -> Result<(), GitError> {
+) -> Result<bool, GitError> {
     let (staged_file, _) = open_regular_from_root(&handoff.staging_dir, &candidate.path)?;
     let staged_blob = hash_open_file(&handoff.git_dir, &handoff.staging_dir, staged_file)?;
     if staged_blob != candidate.capsule_blob {
@@ -3348,33 +3575,58 @@ fn apply_shadow_candidate(
     })?;
     std::io::copy(&mut source, temporary.as_file_mut())
         .map_err(|error| shadow_egress_error(format!("preparing atomic apply file: {error}")))?;
+    // An existing host file keeps its own mode; only a new file takes the capsule's bit.
+    let mode = match current {
+        HostFileState::Regular { mode, .. } => mode,
+        _ if candidate.capsule_executable => 0o755,
+        _ => 0o644,
+    };
     #[cfg(unix)]
-    {
-        let mode = match current {
-            HostFileState::Regular { mode, .. } => mode,
-            _ if candidate.capsule_executable => 0o755,
-            _ => 0o644,
-        };
-        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(mode)).map_err(
-            |error| shadow_egress_error(format!("setting apply file permissions: {error}")),
-        )?;
-    }
+    std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(mode))
+        .map_err(|error| shadow_egress_error(format!("setting apply file permissions: {error}")))?;
+    let agreement = agreed::Agreed::File {
+        blob: candidate.capsule_blob,
+        host_executable: mode & 0o111 != 0,
+        capsule_executable: candidate.capsule_executable,
+    };
     temporary
         .as_file()
         .sync_all()
         .map_err(|error| shadow_egress_error(format!("syncing apply file: {error}")))?;
-    temporary.persist(&destination).map_err(|error| {
-        shadow_egress_error(format!(
+    // Journal the write before it happens. If the record of a write were lost, a capsule that
+    // later changed the file back would match the older base and its change would be dropped.
+    if let Err(error) = agreed::record_intent(
+        &handoff.state_dir,
+        handoff.baseline,
+        &candidate.path,
+        agreed::Intent { agreed: agreement },
+    ) {
+        // The intent may be on disk even though its flush failed. Withdraw it, best effort,
+        // so the untouched path is not disputed next round.
+        let _ = agreed::record_cancelled(&handoff.state_dir, handoff.baseline, &candidate.path);
+        return Err(error);
+    }
+    if let Err(error) = temporary.persist(&destination) {
+        // Best effort: if the cancellation is lost too, the next round disputes the path.
+        let _ = agreed::record_cancelled(&handoff.state_dir, handoff.baseline, &candidate.path);
+        return Err(shadow_egress_error(format!(
             "atomically replacing {}: {}",
             escape_shadow_path(&candidate.path),
             error.error
-        ))
-    })?;
+        )));
+    }
     #[cfg(unix)]
     File::open(parent)
         .and_then(|directory| directory.sync_all())
         .map_err(|error| shadow_egress_error(format!("syncing apply directory: {error}")))?;
-    Ok(())
+    // Best effort: a lost confirmation is settled from the host file at the next round.
+    let _ = agreed::record_landed(
+        &handoff.state_dir,
+        handoff.baseline,
+        &candidate.path,
+        agreement,
+    );
+    Ok((mode & 0o111 != 0) != candidate.capsule_executable)
 }
 
 fn case_fold_collision_paths(paths: &[PathBuf]) -> HashSet<PathBuf> {
@@ -3408,6 +3660,7 @@ pub fn apply_shadow_handoff(
         refused: Vec::new(),
         skipped_implicit_runners: Vec::new(),
         failed: Vec::new(),
+        kept_host_mode: Vec::new(),
     };
 
     // Classify BEFORE path validation so refused entries never reach the apply
@@ -3448,7 +3701,12 @@ pub fn apply_shadow_handoff(
 
     for candidate in admitted {
         match apply_shadow_candidate(handoff, host_root, candidate) {
-            Ok(()) => report.applied.push(candidate.path.clone()),
+            Ok(kept_host_mode) => {
+                report.applied.push(candidate.path.clone());
+                if kept_host_mode {
+                    report.kept_host_mode.push(candidate.path.clone());
+                }
+            }
             // One path whose host content moved between classification and write
             // says nothing about the others: record it and keep going, so a
             // single conflict cannot strand every remaining clean file.

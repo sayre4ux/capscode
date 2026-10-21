@@ -48,6 +48,99 @@ impl ShadowOutcome {
     }
 }
 
+const WORKSPACE_LOCK: &str = "workspace.lock";
+
+/// Exclusive hold on one session's workspace, released on drop.
+///
+/// File sync reads a stopped workspace, writes host files, and records what it wrote and
+/// which workspace state it synced. Another command starting the box or syncing it in the
+/// middle could fold edits nobody reviewed into that record. So `sync`, `rm`, `resume`, and
+/// `uninstall` hold this lock for their whole run, and a one-shot session's own file sync
+/// exit holds it from its capture onward.
+#[derive(Debug)]
+pub(crate) struct WorkspaceLock {
+    _file: Option<std::fs::File>,
+}
+
+/// Take a session's workspace lock, refusing if another command holds it. A session with no
+/// state directory has no workspace to sync or record, so it gets an empty guard rather than
+/// a directory created for the lock.
+pub(crate) fn lock_workspace(state_dir: &Path) -> Result<WorkspaceLock> {
+    try_workspace_lock(state_dir)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "another capscode command is syncing, removing, or starting this box; try again when it finishes"
+        )
+    })
+}
+
+/// Take a session's workspace lock, waiting for another command to release it. A session's
+/// own exit handoff uses this: refusing would abandon the capsule while a `sync` or `rm` of
+/// it is still copying the workspace out. The wait polls, so a signal can still end it.
+pub(crate) async fn lock_workspace_waiting(state_dir: &Path) -> Result<WorkspaceLock> {
+    let mut announced = false;
+    loop {
+        if let Some(lock) = try_workspace_lock(state_dir)? {
+            return Ok(lock);
+        }
+        if !announced {
+            note("Waiting for another capscode command on this session to finish.");
+            announced = true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+/// Take the workspace lock of every session under `sessions_dir`, for a command that removes
+/// them all. Refuses if any is held.
+pub(crate) fn lock_all_workspaces(sessions_dir: &Path) -> Result<Vec<WorkspaceLock>> {
+    let entries = match std::fs::read_dir(sessions_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("listing {}", sessions_dir.display()))
+        }
+    };
+    let mut locks = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("listing {}", sessions_dir.display()))?;
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            locks.push(
+                lock_workspace(&entry.path())
+                    .with_context(|| format!("session {}", entry.file_name().to_string_lossy()))?,
+            );
+        }
+    }
+    Ok(locks)
+}
+
+/// Take the lock without waiting; `None` means another command holds it.
+fn try_workspace_lock(state_dir: &Path) -> Result<Option<WorkspaceLock>> {
+    if !state_dir.is_dir() {
+        return Ok(Some(WorkspaceLock { _file: None }));
+    }
+    let path = state_dir.join(WORKSPACE_LOCK);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: flock on a descriptor this function owns; it reads no memory.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                return Ok(None);
+            }
+            return Err(error).with_context(|| format!("locking {}", path.display()));
+        }
+    }
+    Ok(Some(WorkspaceLock { _file: Some(file) }))
+}
+
 /// Stop the capsule, then take a fresh export of its workspace.
 ///
 /// The stop is the point: `docker cp` of a tree an agent is still writing to can
@@ -150,6 +243,13 @@ pub(crate) fn present_and_apply(
             "Skipped {} file(s) the host would execute from repo content; copy them by hand after review: {}",
             report.skipped_implicit_runners.len(),
             join_paths(&report.skipped_implicit_runners)
+        ));
+    }
+    if !report.kept_host_mode.is_empty() {
+        note(format!(
+            "Kept your file mode for {} file(s) whose executable bit the box changed; set it by hand if you want it: {}",
+            report.kept_host_mode.len(),
+            join_paths(&report.kept_host_mode)
         ));
     }
     if report.applied.is_empty() {
@@ -286,7 +386,60 @@ mod tests {
             refused: Vec::new(),
             skipped_implicit_runners: Vec::new(),
             failed: Vec::new(),
+            kept_host_mode: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_second_workspace_lock_on_the_same_box_is_refused_until_the_first_drops() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = super::lock_workspace(dir.path()).unwrap();
+        let error = super::lock_workspace(dir.path()).unwrap_err();
+        assert!(
+            error.to_string().contains("try again when it finishes"),
+            "{error}"
+        );
+        drop(first);
+        super::lock_workspace(dir.path()).unwrap();
+
+        let missing = dir.path().join("gone");
+        super::lock_workspace(&missing).unwrap();
+        assert!(
+            !missing.exists(),
+            "locking does not create a state directory"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_waiting_lock_proceeds_once_the_holder_lets_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = super::lock_workspace(dir.path()).unwrap();
+        let path = dir.path().to_path_buf();
+        let waiter =
+            tokio::spawn(async move { super::lock_workspace_waiting(&path).await.is_ok() });
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        assert!(!waiter.is_finished(), "it waits while the lock is held");
+        drop(holder);
+        assert!(waiter.await.unwrap());
+    }
+
+    #[test]
+    fn locking_every_session_refuses_while_one_is_busy() {
+        let sessions = tempfile::tempdir().unwrap();
+        for name in ["a", "b"] {
+            std::fs::create_dir(sessions.path().join(name)).unwrap();
+        }
+        let busy = super::lock_workspace(&sessions.path().join("b")).unwrap();
+        let error = super::lock_all_workspaces(sessions.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("session b"), "{error:#}");
+        drop(busy);
+        assert_eq!(
+            super::lock_all_workspaces(sessions.path()).unwrap().len(),
+            2
+        );
+        assert!(super::lock_all_workspaces(&sessions.path().join("none"))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

@@ -280,6 +280,11 @@ pub(crate) async fn resume(
     options: ResumeOptions,
     runtime: Arc<dyn RuntimeAdapter>,
 ) -> Result<()> {
+    // A box must not start while a sync or rm is reading or recording its workspace, and
+    // what this resume reads about the box must be read under the same lock.
+    let _workspace_lock = crate::session::shadow::lock_workspace(
+        &crate::session::state::session_state_dir(&SessionId::from(target.session.clone())),
+    )?;
     let objects = runtime.list_owned().await?;
     let existing_containers = box_container_members(&objects, target);
     let entry = index::entry_for_session(&target.session)?.ok_or_else(|| {

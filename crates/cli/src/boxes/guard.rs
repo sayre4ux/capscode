@@ -81,7 +81,10 @@ pub(crate) async fn record_synced_with_home(
     let state_dir = config_home
         .join("sessions")
         .join(capscode_core::SessionId::from(target.session.clone()).as_str());
-    fs::create_dir_all(&state_dir).with_context(|| format!("creating {}", state_dir.display()))?;
+    // A box removed since the sync has no state dir; recreating one would leave a stray record.
+    if !state_dir.is_dir() {
+        bail!("cannot record sync: the box's session state is gone");
+    }
     write_sync_record(&state_dir, identity)?;
     let mut updated = entry;
     updated.last_synced = index::now();
@@ -533,6 +536,7 @@ mod tests {
     #[tokio::test]
     async fn record_synced_core_stores_exported_oid_after_mock_capsule_head_moves() {
         let config_home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(config_home.path().join("sessions/s1")).unwrap();
         let index_path = config_home.path().join("boxes.json");
         index::write_to(
             &index_path,

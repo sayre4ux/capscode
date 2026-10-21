@@ -547,6 +547,10 @@ async fn remove_box(
     force: bool,
     discard_workspace: bool,
 ) -> Result<()> {
+    let workspace_lock =
+        crate::session::shadow::lock_workspace(&crate::session::state::session_state_dir(
+            &capscode_core::SessionId::from(target.session.clone()),
+        ))?;
     if !discard_workspace {
         let work = match crate::boxes::unsynced_work(&target, Arc::clone(&runtime)).await {
             Ok(work) => work,
@@ -570,7 +574,14 @@ async fn remove_box(
             bail!("{}", ignored_files_message(&target.name, &work.ignored));
         }
     }
-    crate::commands::rm_box_with_confirmation(runtime, &target, force, discard_workspace).await
+    crate::commands::rm_box_with_confirmation(
+        runtime,
+        &target,
+        force,
+        discard_workspace,
+        workspace_lock,
+    )
+    .await
 }
 
 fn ignored_files_message(name: &str, ignored: &[String]) -> String {

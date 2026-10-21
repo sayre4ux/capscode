@@ -2040,14 +2040,27 @@ pub async fn rm_with_confirmation(
     discard_workspace: bool,
     yes: bool,
 ) -> Result<()> {
-    rm_with_box_identity(runtime, session, all, force, discard_workspace, yes, None).await
+    rm_with_box_identity(
+        runtime,
+        session,
+        all,
+        force,
+        discard_workspace,
+        yes,
+        None,
+        None,
+    )
+    .await
 }
 
+/// Remove a box. The caller holds its workspace lock, taken before it checked the box for
+/// unsynced work, so nothing can start or change the box between that check and removal.
 pub(crate) async fn rm_box_with_confirmation(
     runtime: Arc<dyn RuntimeAdapter>,
     target: &crate::boxes::BoxRef,
     force: bool,
     discard_workspace: bool,
+    workspace_lock: crate::session::shadow::WorkspaceLock,
 ) -> Result<()> {
     rm_with_box_identity(
         runtime,
@@ -2057,10 +2070,12 @@ pub(crate) async fn rm_box_with_confirmation(
         discard_workspace,
         false,
         Some(target),
+        Some(workspace_lock),
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn rm_with_box_identity(
     runtime: Arc<dyn RuntimeAdapter>,
     session: Option<String>,
@@ -2069,6 +2084,7 @@ async fn rm_with_box_identity(
     discard_workspace: bool,
     yes: bool,
     expected_box: Option<&crate::boxes::BoxRef>,
+    workspace_lock: Option<crate::session::shadow::WorkspaceLock>,
 ) -> Result<()> {
     if !all && session.is_none() {
         bail!("provide a session id or use --all");
@@ -2076,6 +2092,21 @@ async fn rm_with_box_identity(
     if let Some(session) = session.as_deref() {
         validate_session_id(session)?;
     }
+    // One session's rm holds its workspace lock from before it reads the box until the box
+    // is gone. `--all` copies nothing back but deletes every session's state, so it holds
+    // every lock.
+    let _all_workspace_locks = if all {
+        crate::session::shadow::lock_all_workspaces(&Config::config_home().join("sessions"))?
+    } else {
+        Vec::new()
+    };
+    let workspace_lock = match (workspace_lock, session.as_deref()) {
+        (Some(lock), _) => Some(lock),
+        (None, Some(session)) if !all => Some(crate::session::shadow::lock_workspace(
+            &crate::session::state::session_state_dir(&SessionId::from(session.to_owned())),
+        )?),
+        (None, _) => None,
+    };
     let objects = runtime.list_owned().await?;
     let selected = select_rm_objects(&objects, session.as_deref(), all, expected_box);
     if selected.is_empty() {
@@ -2131,6 +2162,9 @@ async fn rm_with_box_identity(
             .unwrap_or_else(|| SessionId::from(requested.to_string()));
         let capture_runtime = runtime.as_ref();
         let capture_session = session_id.clone();
+        let capture_lock = workspace_lock
+            .as_ref()
+            .expect("a single-session rm holds the workspace lock");
         let workspace_mode = crate::session::state::read_session_workspace_mode(&session_id)?
             .unwrap_or(capscode_core::WorkspaceMode::Copy);
         let clean_state = rm_session_core(
@@ -2146,6 +2180,7 @@ async fn rm_with_box_identity(
                     &capture_session,
                     workspace_mode,
                     discard_workspace,
+                    capture_lock,
                 )
                 .await
             },
@@ -2253,6 +2288,7 @@ async fn capture_rm_session(
     session: &SessionId,
     workspace_mode: capscode_core::WorkspaceMode,
     discard_workspace: bool,
+    workspace_lock: &crate::session::shadow::WorkspaceLock,
 ) -> Result<RmSessionWork> {
     if discard_workspace {
         note(format!(
@@ -2368,6 +2404,7 @@ async fn capture_rm_session(
                     &state_dir,
                     false,
                     false,
+                    workspace_lock,
                 )
                 .await
                 .with_context(|| {
@@ -2553,7 +2590,7 @@ pub(crate) fn validate_session_id(session: &str) -> Result<()> {
     Ok(())
 }
 
-fn session_state_handoff_data(state_dir: &Path) -> Result<Vec<PathBuf>> {
+pub(crate) fn session_state_handoff_data(state_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut protected = Vec::new();
     for entry in fs::read_dir(state_dir)
         .with_context(|| format!("listing session state {}", state_dir.display()))?
@@ -3008,6 +3045,9 @@ pub async fn uninstall(
         discard_workspace,
         crate::boxes::index::read().map(|entries| entries.len()),
     )?;
+    // Held until the end: nothing may start, sync, or remove a session between the checks
+    // below and the deletion they approve.
+    let _workspace_locks = crate::session::shadow::lock_all_workspaces(&home.join("sessions"))?;
     let boxes = crate::boxes::workspaces_at_risk(&objects, runtime.as_deref()).await?;
     let kept_handoffs = kept_handoff_data(&home);
     print_uninstall_plan(
@@ -3296,6 +3336,9 @@ pub async fn sync(
         .collect();
     let capsule = resolve_sync_capsule(&capsules, requested_session.as_deref())?;
     let session = capsule.session.clone().expect("filtered above");
+    let workspace_lock = crate::session::shadow::lock_workspace(
+        &crate::session::state::session_state_dir(&session),
+    )?;
     let workspace_mode = crate::session::state::read_session_workspace_mode(&session)?
         .unwrap_or(capscode_core::WorkspaceMode::Copy);
     if workspace_mode == capscode_core::WorkspaceMode::Mount {
@@ -3331,6 +3374,7 @@ pub async fn sync(
                 &state_dir,
                 verbose,
                 box_name.is_some(),
+                &workspace_lock,
             )
             .await?;
             let recorded = !unsupported && outcome.left_nothing_behind();
@@ -3440,7 +3484,26 @@ async fn shadow_copy_back(
     state_dir: &Path,
     verbose: bool,
     record_identity: bool,
+    _workspace_lock: &crate::session::shadow::WorkspaceLock,
 ) -> Result<(ShadowOutcome, bool, Option<crate::boxes::SyncIdentity>)> {
+    // The caller may have read the box before it held the lock; a `resume` in between can
+    // start or recreate the capsule, and a running workspace must be stopped before capture.
+    let objects = runtime
+        .list_owned()
+        .await
+        .context("re-reading the box after locking its workspace")?;
+    let changed = || {
+        anyhow::anyhow!("the box changed while this command waited for it; run the command again")
+    };
+    let fresh = objects
+        .iter()
+        .find(|object| object.id == capsule.id)
+        .ok_or_else(changed)?;
+    // Stopping a box the user did not see running would skip the confirmation sync asks for.
+    if capsule_is_running(fresh) && !capsule_is_running(capsule) {
+        return Err(changed());
+    }
+    let capsule = fresh;
     let container = capscode_core::ContainerId(capsule.id.clone());
     if capsule_is_running(capsule) {
         note(format!(

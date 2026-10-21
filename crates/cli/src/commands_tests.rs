@@ -1213,6 +1213,7 @@ async fn sync_flow_records_the_exported_identity_after_capsule_head_moves() {
     };
     let config_home = tempfile::tempdir().unwrap();
     let index_path = config_home.path().join("boxes.json");
+    fs::create_dir_all(config_home.path().join("sessions").join(&target.session)).unwrap();
     crate::boxes::index::write_to(
         &index_path,
         &[crate::boxes::index::Entry {

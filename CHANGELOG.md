@@ -10,6 +10,17 @@ This file follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) f
   Edits newer than the box's last automatic checkpoint left its private checkpoint repository
   dirty, and a stopped box never took another checkpoint. A full sync now commits the tree it
   brought back, so the box reads as synced until it changes again.
+- Repeated non-Git `sync` no longer reports its own earlier writes as conflicts. Each file is
+  compared with what the host and the box last agreed on: the session's starting snapshot until
+  a sync writes the file or finds it identical on both sides. A file you edited on the host
+  since then still conflicts. If a sync wrote a newer version of a file and the box later changes
+  it back to its starting content, that change is now handed off too instead of being dropped.
+- `sync`, `rm`, `resume`, and `uninstall` no longer act on the same box at once. A second one
+  stops with "try again when it finishes", so a box cannot start while a sync is reading and
+  recording its workspace. A one-shot session that exits during a `sync` or `rm` of it waits for
+  that command instead of failing.
+- After a non-Git `sync` writes files, `capscode` now says when it kept your file's mode
+  although the box changed the file's executable bit.
 
 ## [0.1.1] - 2026-10-20
 

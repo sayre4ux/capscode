@@ -31,9 +31,18 @@ to copy.
 
 **Non-git directories work too.** CapsCode snapshots the folder host-side (the capsule sees
 no `.git` at all), quiesces the capsule before capturing changes, and then offers to apply
-clean, non-conflicting files back to your folder — with per-file conflict detection against
-the session baseline, backups of anything overwritten, and a durable staging copy for
-whatever it declines to touch. Non-interactive runs never write to your folder.
+clean, non-conflicting files back to your folder — with per-file conflict detection, backups of
+anything overwritten, and a durable staging copy for whatever it declines to touch.
+Non-interactive runs never write to your folder.
+
+A file conflicts when your folder changed it since the box and your folder last agreed on it.
+Until a file is first synced, that agreement is the snapshot taken when the session started.
+After a sync writes it, or finds it identical on both sides, the agreement moves to that
+content, so the next sync does not report CapsCode's own writes as your edits. The record lives
+in the session's `agreed.jsonl`. Each write is noted there before the file is replaced. If a
+sync is interrupted midway, the next one reports each file it was writing as a conflict until
+your folder holds the box's version. If the record is damaged, `sync` and `rm` stop and say how
+to continue rather than guess.
 
 `capscode sync <box>` and `capscode rm <box>` can copy a non-git workspace back too. Sync stops
 a running box to capture a consistent snapshot; after sync, enter it again with `capscode <box>`

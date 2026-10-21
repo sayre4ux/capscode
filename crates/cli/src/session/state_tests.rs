@@ -2438,3 +2438,58 @@ fn only_box_capsules_get_the_kill_capability() {
     assert!(with_keeper.iter().any(|cap| cap == "KILL"));
     assert_eq!(with_keeper.len(), capsule_cap_add(false).len() + 1);
 }
+
+#[test]
+fn an_empty_exit_round_keeps_handoff_data_an_earlier_sync_left() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(!keep_state_after_exit_round(
+        ShadowOutcome::NoChanges,
+        dir.path()
+    ));
+    assert!(keep_state_after_exit_round(
+        ShadowOutcome::Staged,
+        dir.path()
+    ));
+    std::fs::create_dir_all(dir.path().join("backup")).unwrap();
+    std::fs::write(
+        dir.path().join("backup/notes.md"),
+        "overwritten host file\n",
+    )
+    .unwrap();
+    assert!(keep_state_after_exit_round(
+        ShadowOutcome::NoChanges,
+        dir.path()
+    ));
+}
+
+#[tokio::test]
+async fn an_exit_after_another_command_removed_the_session_hands_nothing_off() {
+    let runtime = Arc::new(MockRuntime::new());
+    let mut driver = SessionDriver::new(
+        options_with_config(Config::default()),
+        runtime.clone(),
+        Arc::new(MockGit),
+        Arc::new(MockNetwork),
+    )
+    .unwrap();
+    driver.state = State::Draining;
+    // The mock runtime lists nothing: a `capscode rm` removed every object while this exit
+    // waited for the workspace lock.
+    driver.resources.capsule = Some(ContainerId("capsule".into()));
+    driver.resources.gateway = Some(ContainerId("gateway".into()));
+    driver.resources.volume = Some(VolumeId("volume".into()));
+    driver.resources.ingress_receipt = Some(IngressReceipt::Shadow {
+        git_dir: PathBuf::from("shadow.git"),
+        baseline: git2::Oid::ZERO_SHA1.to_string(),
+        state_dir: PathBuf::from("state-that-does-not-exist"),
+    });
+
+    driver.advance().await.unwrap();
+    assert_eq!(driver.state, State::TearingDown);
+    assert!(driver.resources.capsule.is_none());
+    assert!(driver.resources.gateway.is_none());
+    assert!(driver.resources.volume.is_none());
+    driver.advance().await.unwrap();
+    assert_eq!(driver.state, State::Destroyed);
+    assert!(!runtime.removed_volume.load(Ordering::SeqCst));
+}

@@ -193,6 +193,8 @@ pub struct SessionDriver {
     work_captured: bool,
     wip_skipped: bool,
     preserve_state_dir: bool,
+    /// Held from the file sync capture until the driver is dropped.
+    workspace_lock: Option<crate::session::shadow::WorkspaceLock>,
     silent_shutdown: bool,
     tool_exit_code: i32,
     profile: LaunchProfile,
@@ -249,6 +251,7 @@ impl SessionDriver {
             work_captured: false,
             wip_skipped: false,
             preserve_state_dir: false,
+            workspace_lock: None,
             silent_shutdown: false,
             tool_exit_code: 0,
             profile,
@@ -669,6 +672,45 @@ impl SessionDriver {
                             .capsule
                             .clone()
                             .context("capsule missing in file sync Draining")?;
+                        self.workspace_lock = Some(
+                            crate::session::shadow::lock_workspace_waiting(&session_state_dir(
+                                &self.options.session,
+                            ))
+                            .await?,
+                        );
+                        // A `capscode rm` of this session may have finished while this exit
+                        // waited for the lock. Its copy-back already handled the workspace.
+                        let objects = self
+                            .runtime
+                            .list_owned()
+                            .await
+                            .context("re-reading the session after locking its workspace")?;
+                        if !objects.iter().any(|object| object.id == capsule.0) {
+                            let volume_left =
+                                self.resources.volume.as_ref().is_some_and(|volume| {
+                                    objects.iter().any(|object| object.id == volume.0)
+                                });
+                            note(format!(
+                                "Session {} was removed by another capscode command; nothing left to hand off.",
+                                self.options.session
+                            ));
+                            // With the workspace volume gone there is nothing to preserve; a
+                            // volume still present keeps it, as for any uncaptured exit.
+                            self.work_captured = !volume_left;
+                            self.preserve_state_dir = state_dir.is_dir();
+                            // Teardown should not try to remove what is already gone.
+                            self.resources.capsule = None;
+                            if !volume_left {
+                                self.resources.volume = None;
+                            }
+                            if let Some(gateway) = &self.resources.gateway {
+                                if !objects.iter().any(|object| object.id == gateway.0) {
+                                    self.resources.gateway = None;
+                                }
+                            }
+                            self.transition(State::TearingDown);
+                            return Ok(());
+                        }
                         // Quiesce BEFORE capture: stop the capsule so the tool's
                         // background writers can't race the export. A torn capture
                         // could read as empty, and teardown would then delete the
@@ -735,6 +777,10 @@ impl SessionDriver {
                             .capsule
                             .as_ref()
                             .context("capsule missing in file sync Egressing")?;
+                        // A `capscode sync` of this session may have left its round behind.
+                        // Keep it as a previous round rather than refusing to start this one.
+                        capscode_git::retire_previous_handoff(&state_dir)
+                            .context("making room for the exit handoff")?;
                         let handoff = shadow_egress(
                             capsule,
                             &self.options.host_repo,
@@ -755,7 +801,10 @@ impl SessionDriver {
                         // Nothing to hand off means the durable copy is worthless,
                         // so teardown may clean it up. Anything else must survive:
                         // a later failure must not delete the only copy of the work.
-                        self.preserve_state_dir = outcome != ShadowOutcome::NoChanges;
+                        // An earlier `capscode sync` of this session may also have left
+                        // staged files, backups of host files it overwrote, or retired
+                        // rounds, which an empty exit round must not delete either.
+                        self.preserve_state_dir = keep_state_after_exit_round(outcome, &state_dir);
                     }
                 }
                 self.transition(State::TearingDown);
@@ -3024,6 +3073,15 @@ pub(crate) fn cache_volume(session: &SessionId) -> VolumeId {
 
 const HOST_REPO_STATE_FILE: &str = "host-repo.json";
 const WORKSPACE_MODE_STATE_FILE: &str = "workspace-mode.json";
+
+/// Whether a session's exit handoff must keep its state dir: when the round left work behind,
+/// or an earlier `capscode sync` of this session left staged files, backups of host files it
+/// overwrote, or retired rounds, which an empty exit round must not delete.
+fn keep_state_after_exit_round(outcome: ShadowOutcome, state_dir: &Path) -> bool {
+    outcome != ShadowOutcome::NoChanges
+        || crate::commands::session_state_handoff_data(state_dir)
+            .map_or(true, |kept| !kept.is_empty())
+}
 
 pub(crate) fn session_state_dir(session: &SessionId) -> PathBuf {
     Config::config_home()

@@ -34,9 +34,8 @@ fn one_failed_apply_does_not_abandon_the_remaining_clean_files() {
         changes: Vec::new(),
         conflicts: Vec::new(),
         unsupported: Vec::new(),
-        diff: String::new(),
-        diff_truncated: false,
         git_dir,
+        baseline: Oid::ZERO_SHA1,
         candidates: vec![
             ShadowApplyCandidate {
                 path: "moved.txt".into(),
@@ -1573,14 +1572,14 @@ fn parses_shadow_name_status_records_including_non_ascii_paths() {
 }
 
 #[test]
-fn shadow_name_status_parser_accepts_output_larger_than_display_limit() {
+fn shadow_name_status_parser_accepts_large_output() {
     let mut input = Vec::new();
     for index in 0..9_000 {
         input.extend_from_slice(b"M\0");
         input.extend_from_slice(format!("generated-file-{index:08}-long-name.txt").as_bytes());
         input.push(0);
     }
-    assert!(input.len() > DIFF_OUTPUT_LIMIT);
+    assert!(input.len() > 256 * 1024);
 
     let changes = parse_name_status_z(&input).unwrap();
 
@@ -2080,9 +2079,8 @@ fn shadow_apply_isolates_case_fold_collisions_and_keeps_clean_files() {
         changes: vec![],
         conflicts: vec![],
         unsupported: vec![],
-        diff: String::new(),
-        diff_truncated: false,
         git_dir,
+        baseline: Oid::ZERO_SHA1,
         candidates: vec![
             candidate(
                 "Case.txt",
@@ -2425,4 +2423,514 @@ async fn test_full_ingress_egress_apply_verify_live() {
     let _ = adapter.remove(&capsule, true).await;
 
     drop(host_td);
+}
+
+/// A non-git workspace where the host tree is also the ingress source, the way the CLI
+/// runs file sync: rounds share one state directory and one immutable ingress commit.
+struct ShadowRounds {
+    _temp: tempfile::TempDir,
+    host: PathBuf,
+    state: PathBuf,
+    export: PathBuf,
+    git_dir: PathBuf,
+    baseline: Oid,
+}
+
+impl ShadowRounds {
+    fn new(files: &[(&str, &str)]) -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let host = temp.path().join("host");
+        let state = temp.path().join("state");
+        let export = state.join("export");
+        for dir in [&host, &state, &export] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        for (path, content) in files {
+            std::fs::write(host.join(path), content).unwrap();
+            std::fs::write(export.join(path), content).unwrap();
+        }
+        let (git_dir, baseline) = build_shadow_repo(&host, &state).unwrap();
+        Self {
+            _temp: temp,
+            host,
+            state,
+            export,
+            git_dir,
+            baseline,
+        }
+    }
+
+    fn capsule(&self, path: &str, content: &str) {
+        std::fs::write(self.export.join(path), content).unwrap();
+    }
+
+    fn host_writes(&self, path: &str, content: &str) {
+        std::fs::write(self.host.join(path), content).unwrap();
+    }
+
+    fn host(&self, path: &str) -> String {
+        std::fs::read_to_string(self.host.join(path)).unwrap()
+    }
+
+    fn round(&self) -> ShadowHandoff {
+        retire_previous_handoff(&self.state).unwrap();
+        prepare_shadow_handoff(
+            &self.export,
+            &self.host,
+            &self.git_dir,
+            self.baseline,
+            &self.state,
+        )
+        .unwrap()
+    }
+
+    /// Run a round and apply every clean file, as a user answering yes would.
+    fn sync(&self) -> (ShadowHandoff, ShadowApplyReport) {
+        let handoff = self.round();
+        let report = apply_shadow_handoff(&handoff, &self.host, false).unwrap();
+        (handoff, report)
+    }
+}
+
+fn conflict_paths(handoff: &ShadowHandoff) -> Vec<String> {
+    handoff
+        .conflicts
+        .iter()
+        .map(|issue| issue.path.display().to_string())
+        .collect()
+}
+
+fn applied_paths(report: &ShadowApplyReport) -> Vec<String> {
+    report
+        .applied
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect()
+}
+
+#[test]
+fn a_file_one_sync_wrote_is_not_a_conflict_in_the_next_round() {
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n"), ("b.txt", "ingress\n")]);
+    rounds.capsule("a.txt", "capsule one\n");
+    let (_, report) = rounds.sync();
+    assert_eq!(applied_paths(&report), ["a.txt"]);
+
+    // Nothing changed since: the round is empty, not a conflict on a.txt.
+    assert!(rounds.round().is_empty());
+
+    // The capsule edits it again: a clean apply, not a conflict.
+    rounds.capsule("a.txt", "capsule two\n");
+    let (handoff, report) = rounds.sync();
+    assert!(handoff.conflicts.is_empty(), "{:?}", handoff.conflicts);
+    assert_eq!(applied_paths(&report), ["a.txt"]);
+    assert_eq!(rounds.host("a.txt"), "capsule two\n");
+}
+
+#[test]
+fn a_host_edit_after_a_sync_still_conflicts() {
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n")]);
+    rounds.capsule("a.txt", "capsule one\n");
+    rounds.sync();
+
+    rounds.host_writes("a.txt", "host edit\n");
+    rounds.capsule("a.txt", "capsule two\n");
+    let (handoff, report) = rounds.sync();
+    assert_eq!(conflict_paths(&handoff), ["a.txt"]);
+    assert!(report.applied.is_empty());
+    assert_eq!(rounds.host("a.txt"), "host edit\n");
+}
+
+/// The August failure that ruled out advancing the whole baseline: a conflicted path must
+/// not be folded into the base by an unrelated path's apply.
+#[test]
+fn a_conflicted_path_stays_conflicted_after_another_path_applies() {
+    let rounds = ShadowRounds::new(&[("notes.md", "ingress\n"), ("other.txt", "ingress\n")]);
+    rounds.host_writes("notes.md", "host only edit\n");
+    rounds.capsule("notes.md", "capsule edit\n");
+    rounds.capsule("other.txt", "capsule edit\n");
+    let (handoff, report) = rounds.sync();
+    assert_eq!(conflict_paths(&handoff), ["notes.md"]);
+    assert_eq!(applied_paths(&report), ["other.txt"]);
+
+    let handoff = rounds.round();
+    assert_eq!(conflict_paths(&handoff), ["notes.md"]);
+    assert!(handoff.clean_count() == 0);
+    assert_eq!(rounds.host("notes.md"), "host only edit\n");
+}
+
+/// Constraint (d): the change set is taken against the composite base, so a capsule that
+/// goes back to the ingress content after a sync wrote a newer version still hands it off.
+#[test]
+fn a_capsule_revert_to_ingress_content_is_still_handed_off() {
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n")]);
+    rounds.capsule("a.txt", "capsule one\n");
+    rounds.sync();
+
+    rounds.capsule("a.txt", "ingress\n");
+    let (handoff, report) = rounds.sync();
+    assert_eq!(
+        handoff.changes,
+        [ShadowFileChange {
+            kind: ShadowChangeKind::Modified,
+            path: PathBuf::from("a.txt"),
+        }]
+    );
+    assert_eq!(applied_paths(&report), ["a.txt"]);
+    assert_eq!(rounds.host("a.txt"), "ingress\n");
+}
+
+#[test]
+fn a_host_that_already_matches_the_capsule_is_agreement_not_conflict() {
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n"), ("gone.txt", "ingress\n")]);
+    // The user copied the capsule's work by hand, and deleted the same file on both sides.
+    rounds.capsule("a.txt", "same on both\n");
+    rounds.host_writes("a.txt", "same on both\n");
+    rounds.capsule("new.txt", "same new\n");
+    rounds.host_writes("new.txt", "same new\n");
+    std::fs::remove_file(rounds.export.join("gone.txt")).unwrap();
+    std::fs::remove_file(rounds.host.join("gone.txt")).unwrap();
+
+    assert!(rounds.round().is_empty());
+
+    // The record keeps that agreement: a later capsule edit applies cleanly.
+    rounds.capsule("a.txt", "capsule later\n");
+    let (handoff, report) = rounds.sync();
+    assert!(handoff.conflicts.is_empty(), "{:?}", handoff.conflicts);
+    assert_eq!(applied_paths(&report), ["a.txt"]);
+}
+
+#[test]
+fn a_crash_between_a_write_and_its_record_settles_as_agreement() {
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n")]);
+    rounds.capsule("a.txt", "capsule one\n");
+    rounds.sync();
+    // Losing the record is what a crash right after the host write looks like.
+    std::fs::remove_file(rounds.state.join(agreed::AGREED_FILE)).unwrap();
+
+    assert!(rounds.round().is_empty());
+    rounds.capsule("a.txt", "capsule two\n");
+    let (handoff, _) = rounds.sync();
+    assert!(handoff.conflicts.is_empty(), "{:?}", handoff.conflicts);
+}
+
+#[test]
+fn an_unreadable_record_stops_the_round_instead_of_dropping_changes() {
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n")]);
+    rounds.capsule("a.txt", "capsule one\n");
+    rounds.sync();
+    std::fs::write(rounds.state.join(agreed::AGREED_FILE), "garbage\n").unwrap();
+
+    // Ignoring the record would compare a.txt with ingress, so this revert would vanish.
+    rounds.capsule("a.txt", "ingress\n");
+    retire_previous_handoff(&rounds.state).unwrap();
+    let error = prepare_shadow_handoff(
+        &rounds.export,
+        &rounds.host,
+        &rounds.git_dir,
+        rounds.baseline,
+        &rounds.state,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("Move it aside"), "{error}");
+}
+
+#[test]
+#[cfg(unix)]
+fn the_record_keeps_the_mode_the_host_file_was_written_with() {
+    let rounds = ShadowRounds::new(&[("run.sh", "echo ingress\n")]);
+    // An existing host file keeps its own mode, so the capsule's chmod does not land, and
+    // the record must say what the host actually holds.
+    rounds.capsule("run.sh", "echo capsule\n");
+    std::fs::set_permissions(
+        rounds.export.join("run.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let (_, report) = rounds.sync();
+    assert_eq!(applied_paths(&report), ["run.sh"]);
+    assert_eq!(report.kept_host_mode, [PathBuf::from("run.sh")]);
+    let host_mode = std::fs::metadata(rounds.host.join("run.sh"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(host_mode & 0o111, 0);
+
+    let journal =
+        agreed::open_for_round(&rounds.state, rounds.baseline, |_, _| unreachable!()).unwrap();
+    assert!(matches!(
+        journal.entries.get(b"run.sh".as_slice()),
+        Some(agreed::Agreed::File {
+            host_executable: false,
+            capsule_executable: true,
+            ..
+        })
+    ));
+    // The capsule's chmod did not land, but it is settled: the next round is empty.
+    assert!(rounds.round().is_empty());
+
+    // A host chmod since then is a host change, so the capsule's next edit conflicts.
+    std::fs::set_permissions(
+        rounds.host.join("run.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    rounds.capsule("run.sh", "echo capsule two\n");
+    std::fs::set_permissions(
+        rounds.export.join("run.sh"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    assert_eq!(conflict_paths(&rounds.round()), ["run.sh"]);
+}
+
+#[test]
+fn a_file_added_and_written_then_deleted_in_the_capsule_is_a_pending_deletion() {
+    let rounds = ShadowRounds::new(&[("keep.txt", "ingress\n")]);
+    rounds.capsule("new.txt", "added\n");
+    let (_, report) = rounds.sync();
+    assert_eq!(applied_paths(&report), ["new.txt"]);
+
+    std::fs::remove_file(rounds.export.join("new.txt")).unwrap();
+    let handoff = rounds.round();
+    assert_eq!(
+        handoff.changes,
+        [ShadowFileChange {
+            kind: ShadowChangeKind::Deleted,
+            path: PathBuf::from("new.txt"),
+        }]
+    );
+    assert!(handoff.candidates.is_empty(), "deletions are never applied");
+    assert_eq!(rounds.host("new.txt"), "added\n");
+}
+
+#[test]
+fn a_path_that_turns_from_file_to_directory_is_not_applied_over_the_host_file() {
+    let rounds = ShadowRounds::new(&[("keep.txt", "ingress\n")]);
+    rounds.capsule("a", "file\n");
+    rounds.sync();
+
+    std::fs::remove_file(rounds.export.join("a")).unwrap();
+    std::fs::create_dir(rounds.export.join("a")).unwrap();
+    rounds.capsule("a/b", "nested\n");
+    let (handoff, report) = rounds.sync();
+    assert!(conflict_paths(&handoff).contains(&"a/b".to_owned()));
+    assert!(report.applied.is_empty());
+    assert_eq!(rounds.host("a"), "file\n");
+}
+
+fn drop_last_journal_line(rounds: &ShadowRounds) {
+    let path = rounds.state.join(agreed::AGREED_FILE);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut lines: Vec<&str> = text.lines().collect();
+    lines.pop();
+    std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+}
+
+/// A crash after the host write but before its confirmation leaves an intent. The host holds
+/// the new file, so the intent settles as landed and a later revert is still handed off.
+#[test]
+fn a_write_whose_confirmation_was_lost_still_counts_as_written() {
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n")]);
+    rounds.capsule("a.txt", "capsule one\n");
+    rounds.sync();
+    drop_last_journal_line(&rounds);
+
+    rounds.capsule("a.txt", "ingress\n");
+    let (handoff, report) = rounds.sync();
+    assert_eq!(
+        handoff.changes,
+        [ShadowFileChange {
+            kind: ShadowChangeKind::Modified,
+            path: PathBuf::from("a.txt"),
+        }]
+    );
+    assert_eq!(applied_paths(&report), ["a.txt"]);
+    assert_eq!(rounds.host("a.txt"), "ingress\n");
+}
+
+fn open_intent(rounds: &ShadowRounds, path: &str, content: &str) {
+    agreed::record_intent(
+        &rounds.state,
+        rounds.baseline,
+        Path::new(path),
+        agreed::Intent {
+            agreed: agreed::Agreed::File {
+                blob: Oid::hash_object(git2::ObjectType::Blob, content.as_bytes()).unwrap(),
+                host_executable: false,
+                capsule_executable: false,
+            },
+        },
+    )
+    .unwrap();
+}
+
+fn disputed_paths(handoff: &ShadowHandoff) -> Vec<String> {
+    handoff
+        .conflicts
+        .iter()
+        .filter(|issue| issue.reason.contains("interrupted sync"))
+        .map(|issue| issue.path.display().to_string())
+        .collect()
+}
+
+/// A crash after the intent but before the host write, whatever the user did to the host
+/// file afterwards: kept it, edited it, deleted it, or created one where the capsule added
+/// a file. None of these may read as agreed, or the capsule's file would vanish.
+#[test]
+fn a_journaled_write_that_never_reached_the_host_is_disputed() {
+    let rounds = ShadowRounds::new(&[
+        ("kept.txt", "ingress\n"),
+        ("edited.txt", "ingress\n"),
+        ("deleted.txt", "ingress\n"),
+    ]);
+    for path in ["kept.txt", "edited.txt", "deleted.txt", "added.txt"] {
+        rounds.capsule(path, "capsule one\n");
+        open_intent(&rounds, path, "capsule one\n");
+    }
+    rounds.host_writes("edited.txt", "host edit after the crash\n");
+    std::fs::remove_file(rounds.host.join("deleted.txt")).unwrap();
+    rounds.host_writes("added.txt", "the user's own file\n");
+
+    let (handoff, report) = rounds.sync();
+    assert_eq!(
+        disputed_paths(&handoff),
+        ["added.txt", "deleted.txt", "edited.txt", "kept.txt"]
+    );
+    assert!(report.applied.is_empty());
+    assert_eq!(rounds.host("edited.txt"), "host edit after the crash\n");
+    assert_eq!(rounds.host("added.txt"), "the user's own file\n");
+
+    // It stays disputed until the two sides match, even if the host goes back to ingress.
+    rounds.host_writes("edited.txt", "ingress\n");
+    assert_eq!(disputed_paths(&rounds.round()).len(), 4);
+    rounds.host_writes("kept.txt", "capsule one\n");
+    let handoff = rounds.round();
+    assert!(!disputed_paths(&handoff).contains(&"kept.txt".to_owned()));
+    rounds.capsule("kept.txt", "capsule two\n");
+    let (handoff, report) = rounds.sync();
+    assert!(!disputed_paths(&handoff).contains(&"kept.txt".to_owned()));
+    assert!(applied_paths(&report).contains(&"kept.txt".to_owned()));
+}
+
+/// A capsule that deleted a disputed file leaves a pending deletion with a disputed note.
+#[test]
+fn a_disputed_file_the_capsule_deleted_is_a_pending_deletion() {
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n"), ("b.txt", "ingress\n")]);
+    open_intent(&rounds, "a.txt", "capsule one\n");
+    open_intent(&rounds, "b.txt", "capsule one\n");
+    std::fs::remove_file(rounds.export.join("a.txt")).unwrap();
+    std::fs::remove_file(rounds.export.join("b.txt")).unwrap();
+    std::fs::remove_file(rounds.host.join("b.txt")).unwrap();
+
+    let handoff = rounds.round();
+    assert_eq!(
+        handoff.changes,
+        [ShadowFileChange {
+            kind: ShadowChangeKind::Deleted,
+            path: PathBuf::from("a.txt"),
+        }],
+        "b.txt is gone on both sides, which settles it"
+    );
+    assert_eq!(disputed_paths(&handoff), ["a.txt"]);
+    assert_eq!(rounds.host("a.txt"), "ingress\n");
+}
+
+#[test]
+fn a_torn_journal_tail_does_not_swallow_the_next_write() {
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n"), ("b.txt", "ingress\n")]);
+    rounds.capsule("a.txt", "capsule one\n");
+    rounds.sync();
+    let mut journal = std::fs::OpenOptions::new()
+        .append(true)
+        .open(rounds.state.join(agreed::AGREED_FILE))
+        .unwrap();
+    journal.write_all(br#"{"path":"a.txt","wri"#).unwrap();
+    drop(journal);
+
+    rounds.capsule("b.txt", "capsule one\n");
+    let (_, report) = rounds.sync();
+    assert_eq!(applied_paths(&report), ["b.txt"]);
+    assert!(
+        rounds.round().is_empty(),
+        "both writes are recorded, neither reads as a host edit"
+    );
+}
+
+#[test]
+fn a_file_deleted_on_both_sides_and_then_re_added() {
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n"), ("b.txt", "ingress\n")]);
+    for path in ["a.txt", "b.txt"] {
+        std::fs::remove_file(rounds.export.join(path)).unwrap();
+        std::fs::remove_file(rounds.host.join(path)).unwrap();
+    }
+    assert!(rounds.round().is_empty());
+
+    // a.txt comes back only in the capsule: a clean addition. b.txt comes back on both
+    // sides with different content: a conflict.
+    rounds.capsule("a.txt", "capsule\n");
+    rounds.capsule("b.txt", "capsule\n");
+    rounds.host_writes("b.txt", "host\n");
+    let (handoff, report) = rounds.sync();
+    assert_eq!(applied_paths(&report), ["a.txt"]);
+    assert_eq!(conflict_paths(&handoff), ["b.txt"]);
+    assert_eq!(rounds.host("b.txt"), "host\n");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_synced_file_that_becomes_a_symlink_is_unsupported() {
+    let rounds = ShadowRounds::new(&[("keep.txt", "ingress\n")]);
+    rounds.capsule("a.txt", "capsule\n");
+    rounds.sync();
+
+    std::fs::remove_file(rounds.export.join("a.txt")).unwrap();
+    std::os::unix::fs::symlink("keep.txt", rounds.export.join("a.txt")).unwrap();
+    let handoff = rounds.round();
+    assert!(handoff
+        .unsupported
+        .iter()
+        .any(|issue| issue.path == Path::new("a.txt")));
+    assert!(handoff.candidates.is_empty());
+    assert_eq!(rounds.host("a.txt"), "capsule\n");
+}
+
+#[test]
+fn a_host_edit_between_review_and_apply_is_not_overwritten() {
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n")]);
+    rounds.capsule("a.txt", "capsule one\n");
+    rounds.sync();
+
+    rounds.capsule("a.txt", "capsule two\n");
+    let handoff = rounds.round();
+    assert_eq!(handoff.clean_count(), 1);
+    rounds.host_writes("a.txt", "host edit while the prompt was open\n");
+    let report = apply_shadow_handoff(&handoff, &rounds.host, false).unwrap();
+    assert!(report.applied.is_empty());
+    assert_eq!(report.failed.len(), 1);
+    assert_eq!(
+        rounds.host("a.txt"),
+        "host edit while the prompt was open\n"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_write_that_cannot_be_journaled_is_not_made() {
+    // SAFETY: geteuid reads no memory. Root ignores file modes, so the check cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let rounds = ShadowRounds::new(&[("a.txt", "ingress\n"), ("b.txt", "ingress\n")]);
+    rounds.capsule("a.txt", "capsule one\n");
+    rounds.sync();
+    let journal = rounds.state.join(agreed::AGREED_FILE);
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o400)).unwrap();
+
+    rounds.capsule("b.txt", "capsule one\n");
+    let (_, report) = rounds.sync();
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(report.applied.is_empty());
+    assert_eq!(report.failed.len(), 1);
+    assert_eq!(rounds.host("b.txt"), "ingress\n");
 }
