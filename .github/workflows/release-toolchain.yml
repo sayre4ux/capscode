@@ -28,22 +28,29 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - name: Build and smoke, then assemble release assets
+      # A lock that changes only min_cli_version keeps the released sequence; prepare
+      # reports skip=true and the remaining steps do nothing.
+      - id: prepare
+        name: Build and smoke, then assemble release assets
         run: scripts/release/toolchain-release.sh prepare --out-dir "$RUNNER_TEMP/capscode-toolchain-release"
       - id: attest-lock
+        if: steps.prepare.outputs.skip != 'true'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: ${{ runner.temp }}/capscode-toolchain-release/toolchain.lock.toml
       # DECISION: use the attest step's bundle-path output instead of downloading the
       # bundle from the API. The manifest records the bundle's SHA-256, so it is written only now.
       - name: Write channel.json with the lock attestation hash
+        if: steps.prepare.outputs.skip != 'true'
         env:
           LOCK_BUNDLE: ${{ steps.attest-lock.outputs.bundle-path }}
         run: scripts/release/toolchain-release.sh channel --bundle "$LOCK_BUNDLE" --out-dir "$RUNNER_TEMP/capscode-toolchain-release"
-      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+      - if: steps.prepare.outputs.skip != 'true'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: ${{ runner.temp }}/capscode-toolchain-release/channel.json
       - name: Publish release and workflow-only channel branch
+        if: steps.prepare.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: scripts/release/toolchain-release.sh publish --out-dir "$RUNNER_TEMP/capscode-toolchain-release"

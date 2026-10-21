@@ -44,6 +44,12 @@ The daily bot normally does this. When you bump a tool yourself:
 5. Advance `sequence` in the lock and open a pull request. The toolchain
    release runs after it merges.
 
+A CLI release sets the lock's `min_cli_version` to the new version without
+advancing `sequence`, because a test requires the two to match. The toolchain
+release workflow then finds the lock equal to the latest toolchain release apart
+from that line, reports there is nothing to release, and skips its remaining
+steps. Any other change at an already released `sequence` still fails it.
+
 ## Workflow action pins
 
 Workflow actions are pinned to full commit SHAs with the release tag in a

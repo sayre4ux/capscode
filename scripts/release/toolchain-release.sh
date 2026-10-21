@@ -8,14 +8,17 @@ usage() {
   cat <<'USAGE'
 Usage:
   scripts/release/toolchain-release.sh prepare [--lock PATH] [--out-dir PATH]
-      [--digest HEX12] [--dry-run]
+      [--digest HEX12] [--released-lock PATH] [--dry-run]
   scripts/release/toolchain-release.sh channel --bundle PATH [--out-dir PATH]
   scripts/release/toolchain-release.sh publish [--out-dir PATH] [--dry-run]
 
 prepare validates the sequence, builds and smokes the lock, and assembles
 the lock, the smoke report, and channel.partial.json (the manifest without the
 attestation hash). --digest is for offline dry-runs. --lock is accepted for
-dry-run fixtures; a live release uses the canonical lock.
+dry-run fixtures; a live release uses the canonical lock. When the lock keeps the
+latest released sequence and differs from that release only in min_cli_version,
+prepare reports there is nothing to release, sets the step output skip=true, and
+exits 0. --released-lock stands in for that release's lock in dry-run fixtures.
 channel runs after the lock is attested: it checks that the attestation bundle
 (--bundle) covers the lock, stores it as toolchain.lock.toml.sigstore, and writes
 channel.json with the bundle's SHA-256. It needs no network.
@@ -45,6 +48,33 @@ sha256_file() {
   fi
 }
 
+# Record a step output for the workflow; a no-op outside GitHub Actions.
+set_output() {
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    printf '%s=%s\n' "$1" "$2" >>"$GITHUB_OUTPUT"
+  fi
+}
+
+# min_cli_version tracks the workspace version and is not part of the image digest, so
+# a lock that changes only that line describes the toolchain already released.
+lock_without_cli_minimum() {
+  grep -v '^min_cli_version[[:space:]]*=' "$1" || true
+}
+
+lock_matches_release() {
+  local sequence=$1 released status=0
+  released=$(mktemp "${TMPDIR:-/tmp}/capscode-released-lock.XXXXXX")
+  if [[ -n "$released_lock_input" ]]; then
+    cp "$released_lock_input" "$released"
+  elif ! git -C "$ROOT" show "toolchain-$sequence:$LOCK_REL" >"$released" 2>/dev/null; then
+    rm -f "$released"
+    return 1
+  fi
+  cmp -s <(lock_without_cli_minimum "$LOCK_PATH") <(lock_without_cli_minimum "$released") || status=1
+  rm -f "$released"
+  return "$status"
+}
+
 latest_toolchain_sequence() {
   git -C "$ROOT" tag --list 'toolchain-*' |
     sed -n 's/^toolchain-\([0-9][0-9]*\)$/\1/p' |
@@ -59,6 +89,7 @@ if [[ "$mode" == --help || "$mode" == -h ]]; then usage; exit 0; fi
 lock_input=$LOCK_REL
 out_dir=release-assets
 digest_input=
+released_lock_input=
 bundle=
 dry_run=0
 while (($#)); do
@@ -84,6 +115,11 @@ while (($#)); do
       digest_input=$2
       shift 2
       ;;
+    --released-lock)
+      (($# >= 2)) || fail 'missing value for --released-lock'
+      released_lock_input=$2
+      shift 2
+      ;;
     --dry-run) dry_run=1; shift ;;
     *) fail "unknown argument: $1" ;;
   esac
@@ -100,6 +136,9 @@ case "$mode" in
       # DECISION: smoke-tui.sh reads the canonical lock, so a live release must use it too.
       fail 'release builds and smoke only the canonical images/toolchain.lock.toml'
     fi
+    if ((!dry_run)) && [[ -n "$released_lock_input" ]]; then
+      fail '--released-lock is only for dry-run fixtures'
+    fi
     sequence=$(top_value sequence)
     min_cli_version=$(top_value min_cli_version)
     yanked=$(top_value yanked)
@@ -112,8 +151,14 @@ case "$mode" in
     [[ "$previous" =~ ^[0-9]+$ ]] || fail 'could not read the latest local toolchain tag'
     # DECISION: release sequences must increase, but maintainers may skip a value when a release is withdrawn.
     if ((sequence <= previous)); then
+      if ((sequence == previous)) && lock_matches_release "$previous"; then
+        printf 'toolchain-release: the lock matches toolchain-%s apart from min_cli_version; nothing to release\n' "$previous"
+        set_output skip true
+        exit 0
+      fi
       fail "lock sequence must be greater than the latest release ($previous); advance sequence in a PR before releasing (got $sequence)"
     fi
+    set_output skip false
     tag="toolchain-$sequence"
 
     if ((dry_run)); then
