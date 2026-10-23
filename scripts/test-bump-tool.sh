@@ -35,6 +35,31 @@ if select_latest_version "$TEMP/time.json" "$TEMP/versions.json" 1.3.0 3 "$now" 
 fi
 grep -Fq 'not below the current pin 1.3.0' "$TEMP/downgrade.err"
 
+# A stable channel must never pick a prerelease, even one that sorts between the pin and the
+# dist-tag. codex publishes per-platform alpha builds such as 0.164.0-alpha.6-win32-x64 under
+# the same package, and one of those broke the daily bump when 0.164.0 was still in cooldown.
+node - "$now" >"$TEMP/pre-time.json" <<'NODE'
+const now = Number(process.argv[2]);
+const iso = seconds => new Date((now - seconds) * 1000).toISOString();
+process.stdout.write(JSON.stringify({
+  "0.163.0": iso(8 * 86400),
+  "0.164.0-alpha.6-win32-x64": iso(4 * 86400),
+  "0.164.0-alpha.6-linux-x64": iso(4 * 86400),
+  "0.164.0-alpha.12": iso(4 * 86400),
+  "0.164.0": iso(3600)
+}));
+NODE
+printf '["0.163.0","0.164.0-alpha.6-win32-x64","0.164.0-alpha.6-linux-x64","0.164.0-alpha.12","0.164.0"]\n' >"$TEMP/pre-versions.json"
+if selected=$(select_latest_version "$TEMP/pre-time.json" "$TEMP/pre-versions.json" 0.164.0 3 "$now" 0.163.0 2>"$TEMP/pre.err"); then
+  [[ "$selected" == 0.163.0 ]] || { echo "stable channel selected prerelease $selected" >&2; exit 1; }
+else
+  echo "stable channel selection failed: $(cat "$TEMP/pre.err")" >&2
+  exit 1
+fi
+# A prerelease channel still follows its own prereleases.
+selected=$(select_latest_version "$TEMP/pre-time.json" "$TEMP/pre-versions.json" 0.164.0-alpha.12 3 "$now" 0.163.0)
+[[ "$selected" == 0.164.0-alpha.12 ]] || { echo "prerelease channel expected 0.164.0-alpha.12, got $selected" >&2; exit 1; }
+
 if ensure_version_old_enough 1.3.0 "$TEMP/time.json" "$now" 3 2>"$TEMP/young.err"; then
   echo "a version inside the cooldown was accepted without waiver" >&2
   exit 1

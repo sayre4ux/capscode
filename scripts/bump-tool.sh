@@ -65,9 +65,15 @@ if (!parse(distTag) || !parse(pinned)) {
   console.error(`npm returned an invalid dist-tag version: ${distTag}`);
   process.exit(2);
 }
+// A stable dist-tag means the channel ships releases only. Packages such as codex also publish
+// alpha and per-platform builds (0.164.0-alpha.6-win32-x64) that sort between two releases, so
+// without this check a release still in cooldown would fall back to one of those.
+const stableChannel = parse(distTag).pre === null;
 const eligible = versions.filter(version => {
+  const parsed = parse(version);
   const published = Date.parse(times[version] || '');
-  return parse(version) && compare(version, distTag) <= 0 && compare(version, pinned) >= 0 && Number.isFinite(published)
+  return parsed && (!stableChannel || parsed.pre === null)
+    && compare(version, distTag) <= 0 && compare(version, pinned) >= 0 && Number.isFinite(published)
     && Math.floor(published / 1000) <= cutoff;
 });
 eligible.sort(compare);
