@@ -17,8 +17,8 @@
 # bookworm index, then the npm tools, which change most often.
 ARG BASE_IMAGE=capscode/capsule-base:dev
 
-# Bun runtime for omp — pinned multi-arch index digest, bun 1.3.14.
-FROM oven/bun:1-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f AS bun
+# Bun runtime for omp — pinned multi-arch index digest, bun 1.4.4.
+FROM oven/bun:1-debian@sha256:93d5032fe06d163427822dc1598f420363759bb18155c9cc90eb1be05a64a19e AS bun
 
 FROM ${BASE_IMAGE}
 
@@ -75,7 +75,7 @@ ARG CLAUDE_VERSION=2.1.285
 ARG CODEX_VERSION=0.159.3
 ARG OPENCODE_VERSION=1.18.3
 ARG PI_VERSION=0.99.2
-ARG OMP_VERSION=18.4.6
+ARG OMP_VERSION=18.14.1
 ARG CLAUDE_INTEGRITY
 ARG CODEX_INTEGRITY
 ARG OPENCODE_INTEGRITY

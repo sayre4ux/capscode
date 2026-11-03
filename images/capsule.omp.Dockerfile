@@ -8,7 +8,7 @@
 #
 # Bun is required: dist/cli.js has `#!/usr/bin/env bun`, the bundle calls
 # `Bun.hash` / `import.meta.require`, and package.json declares
-# `engines: { bun: ">=1.3.14" }`. Node cannot run it. npm is still the installer;
+# `engines: { bun: ">=1.4.4" }`. Node cannot run it. npm is still the installer;
 # we multi-stage-copy a pinned bun binary into the capsule base and install with
 # `--ignore-scripts` (platform natives resolve without postinstall).
 #
@@ -25,8 +25,8 @@
 # the platform native addon omp cannot start without.
 ARG BASE_IMAGE=capscode/capsule-base:dev
 
-# Pinned multi-arch index digest (linux/amd64 + linux/arm64); bun 1.3.14.
-FROM oven/bun:1-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f AS bun
+# Pinned multi-arch index digest (linux/amd64 + linux/arm64); bun 1.4.4.
+FROM oven/bun:1-debian@sha256:93d5032fe06d163427822dc1598f420363759bb18155c9cc90eb1be05a64a19e AS bun
 
 FROM ${BASE_IMAGE}
 
@@ -35,7 +35,7 @@ COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 ARG OMP_NPM_PACKAGE=@oh-my-pi/pi-coding-agent
 # Version is injected from toolchain.lock.toml; keep the default aligned so a
 # direct documented image build remains reproducible too.
-ARG OMP_VERSION=18.4.6
+ARG OMP_VERSION=18.14.1
 ARG OMP_INTEGRITY
 ARG OMP_BEFORE
 
