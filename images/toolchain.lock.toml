@@ -12,7 +12,7 @@ schema = 1
 # published toolchain release; clients refuse a channel lock whose sequence is not
 # greater than the one they run. `min_cli_version` is the oldest CLI allowed to
 # use this lock. `yanked` lists withdrawn `tool@version` entries or digests.
-sequence = 28
+sequence = 29
 min_cli_version = "0.1.2"
 yanked = []
 
@@ -57,21 +57,21 @@ digest = "sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8
 # the newest versions published before that time, so every build of a pin gets
 # the dependency set that was tested with it. Update entries with
 # scripts/bump-tool.sh, which applies a three-day release and dependency cooldown.
-claude   = { package = "@anthropic-ai/claude-code", version = "2.1.326", integrity = "sha512-F7OqxXKogQYUs+RN1903IWlXGuxn8iwAykx+umRbDKvoBeK0Xm6cdgQx9auu5dtsB+DczN58/EFrlaU8pLfgJg==", resolved_before = "2026-11-22T17:20:19Z", channel = "stable", smoke = "ci", smoke_date = "2026-11-26", smoke_arch = ["amd64"], home_exec_paths = [], published_at = "2026-11-16T18:43:39.005Z", cooldown_waived = "" }
-codex    = { package = "@openai/codex",             version = "0.171.0", integrity = "sha512-1IOFzL2Xg86tLdw6kDo3GoKbkQENgQi7TI6rlEvN132R7ngSw7SNOIQoTcnKzSZZ8kf9N9GynCweSoaFbqk2Eg==", resolved_before = "2026-11-20T18:21:50Z", channel = "latest", smoke = "ci", smoke_date = "2026-11-26", smoke_arch = ["amd64"], home_exec_paths = [], daemon_seed_layout = 1, published_at = "2026-11-20T00:51:29.762Z", cooldown_waived = "" }
-opencode = { package = "opencode-ai",               version = "1.19.6", integrity = "sha512-x0yTvlq3Cyhp3z1IhsNlktLa9M/FSbpMWiDlcGljKMTlBKdHM/um/03JedJa71N2yNlHkOvOPI0H4tbyXuuGwA==", resolved_before = "2026-11-17T15:33:44Z", channel = "latest", smoke = "ci", smoke_date = "2026-11-26", smoke_arch = ["amd64"], home_exec_paths = [], needs_exec_tmpdir = true, published_at = "2026-11-17T07:22:20.263Z", cooldown_waived = "" }
+claude   = { package = "@anthropic-ai/claude-code", version = "2.1.326", integrity = "sha512-F7OqxXKogQYUs+RN1903IWlXGuxn8iwAykx+umRbDKvoBeK0Xm6cdgQx9auu5dtsB+DczN58/EFrlaU8pLfgJg==", resolved_before = "2026-11-22T17:20:19Z", channel = "stable", smoke = "ci", smoke_date = "2026-11-27", smoke_arch = ["amd64"], home_exec_paths = [], published_at = "2026-11-16T18:43:39.005Z", cooldown_waived = "" }
+codex    = { package = "@openai/codex",             version = "0.172.0", integrity = "sha512-yHf/6wbw4Zvha2M2ylDhDrU9FgfKLYgV6xSzSjlz3gxQNsiVLkXo+fPGwBqvP0A5geLtZs9wAbq+1v7+ZVWJ0g==", resolved_before = "2026-11-24T16:46:24Z", channel = "latest", smoke = "ci", smoke_date = "2026-11-27", smoke_arch = ["amd64"], home_exec_paths = [], daemon_seed_layout = 1, published_at = "2026-11-24T00:09:39.503Z", cooldown_waived = "" }
+opencode = { package = "opencode-ai",               version = "1.19.6", integrity = "sha512-x0yTvlq3Cyhp3z1IhsNlktLa9M/FSbpMWiDlcGljKMTlBKdHM/um/03JedJa71N2yNlHkOvOPI0H4tbyXuuGwA==", resolved_before = "2026-11-17T15:33:44Z", channel = "latest", smoke = "ci", smoke_date = "2026-11-27", smoke_arch = ["amd64"], home_exec_paths = [], needs_exec_tmpdir = true, published_at = "2026-11-17T07:22:20.263Z", cooldown_waived = "" }
 
 # Pi — "a minimal agent harness" (https://pi.dev). Scoped npm package (the bare
 # `pi` name is an UNRELATED joke package). Installed with `--ignore-scripts`.
 # Version/schema verified against its bundled models.json documentation and
 # provider composer while fixing fail-closed broker routing.
-pi       = { package = "@earendil-works/pi-coding-agent", version = "1.6.0", integrity = "sha512-zX1BVEsshx7A2MRuQ6jfr3RJGWw4Wn+vLq5ZfmlvS1RskhRmByaSZVXH/zcwRrWHO7qPgs98pNCbPOEti/t0fQ==", resolved_before = "2026-11-20T18:21:54Z", channel = "latest", smoke = "ci", smoke_date = "2026-11-26", smoke_arch = ["amd64"], home_exec_paths = [], path_tools = ["rg", "fd"], published_at = "2026-11-20T11:09:15.529Z", cooldown_waived = "" }
+pi       = { package = "@earendil-works/pi-coding-agent", version = "1.6.0", integrity = "sha512-zX1BVEsshx7A2MRuQ6jfr3RJGWw4Wn+vLq5ZfmlvS1RskhRmByaSZVXH/zcwRrWHO7qPgs98pNCbPOEti/t0fQ==", resolved_before = "2026-11-20T18:21:54Z", channel = "latest", smoke = "ci", smoke_date = "2026-11-27", smoke_arch = ["amd64"], home_exec_paths = [], path_tools = ["rg", "fd"], published_at = "2026-11-20T11:09:15.529Z", cooldown_waived = "" }
 
 # omp — coding agent at https://omp.sh (npm `@oh-my-pi/pi-coding-agent`, bin `omp`).
 # Different lineage from `pi` above. Requires Bun (see bun_* in [base]); install
 # with `--ignore-scripts`. Integrity verified via `npm view` 2026-07-30.
 # omp records the two search tools installed by this design; additional utilities are not included.
-omp      = { package = "@oh-my-pi/pi-coding-agent", version = "19.1.1", integrity = "sha512-x/7xQXQ5F/ga4LTNOCSQs+cggWY1H5EF34+juTPP9QOyoFgfmOFVspXA4cBCp9EH8D967oje/HiCPpoNsWAyhw==", resolved_before = "2026-11-23T17:00:26Z", channel = "latest", smoke = "ci", smoke_date = "2026-11-26", smoke_arch = ["amd64"], home_exec_paths = [], path_tools = ["rg", "fd"], published_at = "2026-11-23T05:53:56.448Z", cooldown_waived = "" }
+omp      = { package = "@oh-my-pi/pi-coding-agent", version = "19.1.1", integrity = "sha512-x/7xQXQ5F/ga4LTNOCSQs+cggWY1H5EF34+juTPP9QOyoFgfmOFVspXA4cBCp9EH8D967oje/HiCPpoNsWAyhw==", resolved_before = "2026-11-23T17:00:26Z", channel = "latest", smoke = "ci", smoke_date = "2026-11-27", smoke_arch = ["amd64"], home_exec_paths = [], path_tools = ["rg", "fd"], published_at = "2026-11-23T05:53:56.448Z", cooldown_waived = "" }
 playwright_core = { package = "playwright-core", version = "1.65.1", integrity = "sha512-hqPpz7blSMPxWVdoeE1yiBSzXsKiVOd2k+kjCvmUywD2GPO2Dd9HfcWnq9NN0GHbNZDFgZ9JfBFr+X5/BLo0qw==", resolved_before = "2026-11-14T16:09:39Z", channel = "latest", smoke = "none", smoke_date = "", smoke_arch = [], published_at = "2026-11-13T21:36:08.743Z", cooldown_waived = "" }
 
 # Kimi needs NO separate tool entry/image: it is `claude` or `codex` pointed at
